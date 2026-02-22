@@ -153,6 +153,10 @@ PluginComponent {
                 root.hasLive = Api.hasAnyLive(result);
                 root.errorMessage = "";
                 root._updateTimestamp();
+                // Derive matchday from today's matches (most accurate)
+                var md = Api.extractMatchday(result);
+                if (md > 0) root.currentMatchday = md;
+                else if (root.currentMatchday === 0) root.fetchUpcomingMatchday();
             }, function(err) { root.errorMessage = err; });
         }
     }
@@ -209,8 +213,6 @@ PluginComponent {
                 root.standings = result.standings;
                 root.standingsGroups = result.groups;
                 root.standingsError = "";
-                if (result.currentMatchday > 0 && root.currentMatchday === 0)
-                    root.currentMatchday = result.currentMatchday;
             }, function(err) { root.standingsError = err; });
         }
     }
@@ -225,6 +227,28 @@ PluginComponent {
         standingsFetcher.output = "";
         standingsFetcher.command = _buildCurlCommand(Api.buildStandingsUrl(activeLeague));
         standingsFetcher.running = true;
+    }
+
+    // === Fetch: upcoming matchday (lightweight, resolves correct matchday number) ===
+    Process {
+        id: upcomingFetcher
+        property string output: ""
+        stdout: SplitParser { onRead: line => { upcomingFetcher.output += line; } }
+
+        onExited: (exitCode) => {
+            root._handleFetchResult(upcomingFetcher, exitCode, function(body) {
+                var md = Api.parseUpcomingMatchday(body);
+                if (md > 0) root.currentMatchday = md;
+            }, function(err) { /* silent — matchday tab will show error if needed */ });
+        }
+    }
+
+    function fetchUpcomingMatchday() {
+        if (!apiKey || !activeLeague || upcomingFetcher.running) return;
+        if (currentMatchday > 0) return; // already resolved
+        upcomingFetcher.output = "";
+        upcomingFetcher.command = _buildCurlCommand(Api.buildUpcomingUrl(activeLeague));
+        upcomingFetcher.running = true;
     }
 
     // === Polling timer ===
@@ -261,12 +285,19 @@ PluginComponent {
 
     // === Lazy fetch on tab change ===
     onCurrentTabChanged: {
-        if (currentTab === 1 && matchdayMatches.length === 0 && currentMatchday > 0) {
-            fetchMatchday(true);
+        if (currentTab === 1) {
+            if (currentMatchday === 0) fetchUpcomingMatchday();
+            else if (matchdayMatches.length === 0) fetchMatchday(true);
         }
         if (currentTab === 2 && standings.length === 0 && standingsGroups.length === 0) {
             fetchStandings(true);
         }
+    }
+
+    // When matchday is resolved, auto-fetch if the matchday tab is active
+    onCurrentMatchdayChanged: {
+        if (currentMatchday > 0 && currentTab === 1 && matchdayMatches.length === 0)
+            fetchMatchday(true);
     }
 
     // === React to API key changes from settings ===

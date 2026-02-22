@@ -43,14 +43,26 @@ function buildMatchdayUrl(leagueCode, matchday) {
     return _baseUrl + leagueCode + "/matches?matchday=" + matchday;
 }
 
+function buildUpcomingUrl(leagueCode) {
+    return _baseUrl + leagueCode + "/matches?status=SCHEDULED,TIMED,IN_PLAY,PAUSED&limit=1";
+}
+
 function buildStandingsUrl(leagueCode) {
     return _baseUrl + leagueCode + "/standings";
+}
+
+function parseUpcomingMatchday(jsonString) {
+    var resp = JSON.parse(jsonString);
+    if (resp.matches && resp.matches.length > 0)
+        return resp.matches[0].matchday || 0;
+    return 0;
 }
 
 function parseMatch(m) {
     return {
         id: m.id,
         status: m.status,
+        matchday: m.matchday || 0,
         homeTeam: m.homeTeam.shortName || m.homeTeam.name,
         awayTeam: m.awayTeam.shortName || m.awayTeam.name,
         homeCrest: m.homeTeam.crest || "",
@@ -62,6 +74,12 @@ function parseMatch(m) {
         minute: m.minute || null,
         utcDate: m.utcDate
     };
+}
+
+// Extract the most relevant matchday from a list of matches
+function extractMatchday(matches) {
+    if (!matches || matches.length === 0) return 0;
+    return matches[0].matchday || 0;
 }
 
 function _parseMatchList(resp) {
