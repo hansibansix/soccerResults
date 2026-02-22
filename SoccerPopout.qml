@@ -476,6 +476,8 @@ PopoutComponent {
                         delegate: StandingRow {
                             required property var modelData
                             rowData: modelData
+                            leagueCode: popout.activeLeague
+                            totalTeams: popout.standings.length
                         }
                     }
                 }
@@ -522,10 +524,13 @@ PopoutComponent {
                         StandingRow { isHeader: true; rowData: null }
 
                         Repeater {
+                            id: groupRepeater
                             model: modelData.rows
                             delegate: StandingRow {
                                 required property var modelData
                                 rowData: modelData
+                                leagueCode: popout.activeLeague
+                                totalTeams: groupRepeater.count
                             }
                         }
                     }

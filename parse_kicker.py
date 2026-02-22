@@ -223,10 +223,14 @@ def extract_matches(html, json_ld_events, page_matchday):
 
 
 def extract_standings(html):
-    """Extract league standings from the ranking table."""
-    # Find the first ranking table (the main standings, not keeper stats etc.)
+    """Extract league standings from the ranking table.
+
+    Handles both the compact sidebar table (7 columns) from /spieltag
+    and the full table (11 columns) from /tabelle.
+    """
+    # Find the first ranking table (class contains kick__table--ranking)
     table_m = re.search(
-        r'<table class="kick__table kick__table--small kick__table--ranking">(.*?)</table>',
+        r'<table[^>]*class="[^"]*kick__table--ranking[^"]*"[^>]*>(.*?)</table>',
         html, re.DOTALL
     )
     if not table_m:
@@ -235,43 +239,94 @@ def extract_standings(html):
     table_html = table_m.group(1)
     standings = []
 
-    # Extract rows (skip header row)
     rows = re.findall(r'<tr[^>]*>(.*?)</tr>', table_html, re.DOTALL)
 
     for row in rows:
-        # Skip header row (contains <th>)
         if '<th' in row:
             continue
 
-        # Extract all td contents
         tds = re.findall(r'<td[^>]*>(.*?)</td>', row, re.DOTALL)
         if len(tds) < 7:
             continue
 
-        # td[0] = position, td[1] = trend, td[2] = team icon, td[3] = team name
-        # td[4] = played, td[5] = diff, td[6] = points
         position = extract_text(tds[0]).strip()
-        team_name = extract_team_name(tds[3])
-        played = extract_text(tds[4]).strip()
-        diff = extract_text(tds[5]).strip()
-        points = extract_text(tds[6]).strip()
-
         if not position or not position.isdigit():
             continue
+
+        # Detect full table (11 cols) vs compact sidebar (7 cols)
+        is_full = len(tds) >= 11
+
+        # Trend: td[1] icon class
+        trend = ""
+        trend_td = tds[1]
+        if "DropUp" in trend_td:
+            trend = "up"
+        elif "DropDown" in trend_td:
+            trend = "down"
+        elif "DropNull" in trend_td:
+            trend = "same"
+
+        # Team logo: td[2] <img> src
+        crest = ""
+        img_m = re.search(r'<img[^>]+src="([^"]+)"', tds[2])
+        if img_m:
+            crest = img_m.group(1)
+
+        team_name = extract_team_name(tds[3])
+
+        if is_full:
+            # Full /tabelle layout:
+            # td[4]=Sp, td[5]=S (desktop) or S-U-N (mobile), td[6]=U, td[7]=N
+            # td[8]=Tore, td[9]=Diff, td[10]=Punkte
+            played = extract_text(tds[4]).strip()
+
+            # W/D/L: try mobile "19-3-1" first, fall back to individual columns
+            wdl_text = ""
+            mobile_m = re.search(r'kick__table--show-mobile[^>]*>\s*(\d+-\d+-\d+)\s*<', tds[5])
+            if mobile_m:
+                wdl_text = mobile_m.group(1)
+            won, drawn, lost = 0, 0, 0
+            if wdl_text:
+                parts = wdl_text.split("-")
+                if len(parts) == 3:
+                    won, drawn, lost = safe_int(parts[0]), safe_int(parts[1]), safe_int(parts[2])
+            else:
+                # Desktop columns
+                desktop_m = re.search(r'kick__table--show-desktop[^>]*>\s*(\d+)\s*<', tds[5])
+                won = safe_int(desktop_m.group(1)) if desktop_m else safe_int(extract_text(tds[5]))
+                drawn = safe_int(extract_text(tds[6]))
+                lost = safe_int(extract_text(tds[7]))
+
+            # Goals: "85:21"
+            goals_text = extract_text(tds[8]).strip()
+            gf, ga = 0, 0
+            if ":" in goals_text:
+                gf_s, ga_s = goals_text.split(":", 1)
+                gf, ga = safe_int(gf_s), safe_int(ga_s)
+
+            gd = safe_int(extract_text(tds[9]).strip())
+            points = safe_int(extract_text(tds[10]).strip())
+        else:
+            # Compact sidebar: td[4]=played, td[5]=diff, td[6]=points
+            played = extract_text(tds[4]).strip()
+            won, drawn, lost = 0, 0, 0
+            gf, ga = 0, 0
+            gd = safe_int(extract_text(tds[5]).strip())
+            points = safe_int(extract_text(tds[6]).strip())
 
         standings.append({
             "position": int(position),
             "team": team_name,
-            "tla": "",
+            "crest": crest,
+            "trend": trend,
             "played": safe_int(played),
-            "won": 0,
-            "drawn": 0,
-            "lost": 0,
-            "gf": 0,
-            "ga": 0,
-            "gd": safe_int(diff),
-            "points": safe_int(points),
-            "form": "",
+            "won": won,
+            "drawn": drawn,
+            "lost": lost,
+            "gf": gf,
+            "ga": ga,
+            "gd": gd,
+            "points": points,
         })
 
     return standings
@@ -431,8 +486,29 @@ def main():
         json.dump({"error": "Parse error: " + str(e)}, sys.stdout)
 
 
+def main_standings():
+    """Parse a /tabelle page for standings only."""
+    html = sys.stdin.read()
+
+    if not html or len(html) < 500:
+        json.dump({"standings": []}, sys.stdout)
+        return
+
+    if "<title>403" in html or "<title>404" in html or "Access Denied" in html:
+        json.dump({"standings": []}, sys.stdout)
+        return
+
+    try:
+        standings = extract_standings(html)
+        json.dump({"standings": standings}, sys.stdout, ensure_ascii=False)
+    except Exception as e:
+        json.dump({"standings": [], "error": "Parse error: " + str(e)}, sys.stdout)
+
+
 if __name__ == "__main__":
     if "--goals" in sys.argv:
         main_goals()
+    elif "--standings" in sys.argv:
+        main_standings()
     else:
         main()

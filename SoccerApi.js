@@ -53,13 +53,18 @@ function buildMatchdayPageUrl(leagueCode, season, matchday) {
     return _kickerBase + entry.slug + "/spieltag/" + season + "/" + matchday;
 }
 
+function buildStandingsUrl(leagueCode) {
+    var entry = leagueMap[leagueCode];
+    if (!entry) return "";
+    return _kickerBase + entry.slug + "/tabelle";
+}
+
 function parsePageData(data) {
     if (data.error)
         return { error: data.error };
 
     return {
         matches: sortMatches(data.matches || []),
-        standings: data.standings || [],
         matchday: data.matchday || 0,
         season: data.season || ""
     };

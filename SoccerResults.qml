@@ -70,6 +70,8 @@ PluginComponent {
     property real _lastMatchdayFetch: 0
     readonly property int _minFetchIntervalMs: 30000          // 30s min between same-endpoint fetches
     readonly property int _matchdayCacheMs: 600000            // 10min — matchday changes slowly
+    property real _lastStandingsFetch: 0
+    readonly property int _standingsCacheMs: 600000           // 10min — standings change slowly
 
     // === Script path ===
     readonly property string _scriptPath: Qt.resolvedUrl("parse_kicker.py").toString().replace("file://", "")
@@ -108,6 +110,7 @@ PluginComponent {
         lastUpdated = "";
         _lastPageFetch = 0;
         _lastMatchdayFetch = 0;
+        _lastStandingsFetch = 0;
         _goalQueue = [];
         _goalQueueIdx = 0;
         _matchGoals = {};
@@ -156,6 +159,10 @@ PluginComponent {
         return ["bash", "-c", "curl -sS --connect-timeout 10 --max-time 15 -A '" + _userAgent + "' '" + url + "' | python3 '" + _scriptPath + "' --goals"];
     }
 
+    function _buildStandingsFetchCommand(url) {
+        return ["bash", "-c", "curl -sS --connect-timeout 10 --max-time 15 -A '" + _userAgent + "' '" + url + "' | python3 '" + _scriptPath + "' --standings"];
+    }
+
     function _parseResponse(output) {
         if (!output || output.trim() === "")
             return { error: "No response" };
@@ -182,8 +189,13 @@ PluginComponent {
             // Kill stale fetch — onExited will detect stale generation and re-fetch
             pageFetcher.running = false;
         }
+        if (standingsFetcher.running) {
+            standingsFetcher.running = false;
+        }
         // Always schedule a fetch — Qt.callLater ensures it runs after any pending onExited
         Qt.callLater(fetchPage, true);
+        // If already on Table tab, fetch standings for the new league
+        if (currentTab === 2) Qt.callLater(fetchStandings, true);
     }
 
     function pinMatch(matchId, leagueCode) {
@@ -313,7 +325,6 @@ PluginComponent {
             }
 
             root.loading = false;
-            root.standingsLoading = false;
 
             if (exitCode !== 0 && !pageFetcher.output.trim()) {
                 root.errorMessage = "Failed to fetch data";
@@ -338,10 +349,7 @@ PluginComponent {
 
                 root.matches = result.matches;
                 root.hasLive = Api.hasAnyLive(result.matches);
-                root.standings = result.standings;
-                root.standingsGroups = [];
                 root.errorMessage = "";
-                root.standingsError = "";
                 root._updateTimestamp();
 
                 if (result.matchday > 0) root.currentMatchday = result.matchday;
@@ -451,7 +459,6 @@ PluginComponent {
         if (!url) return;
 
         loading = true;
-        standingsLoading = true;
         _fetchingLeague = activeLeague;
         _lastPageFetch = _now();
         pageFetcher.output = "";
@@ -499,6 +506,54 @@ PluginComponent {
         }
     }
 
+    // === Fetch: standings from /tabelle ===
+    Process {
+        id: standingsFetcher
+        property string output: ""
+        stdout: SplitParser { onRead: line => { standingsFetcher.output += line + "\n"; } }
+
+        onExited: (exitCode) => {
+            root.standingsLoading = false;
+
+            if (exitCode !== 0 && !standingsFetcher.output.trim()) {
+                root.standingsError = "Failed to fetch standings";
+                standingsFetcher.output = "";
+                return;
+            }
+
+            var data = root._parseResponse(standingsFetcher.output);
+            standingsFetcher.output = "";
+
+            if (data.error) {
+                root.standingsError = data.error;
+                return;
+            }
+
+            try {
+                root.standings = data.standings || [];
+                root.standingsGroups = [];
+                root.standingsError = "";
+            } catch (e) {
+                console.warn("[soccerResults] Standings parse error: " + e);
+                root.standingsError = "Failed to parse standings";
+            }
+        }
+    }
+
+    function fetchStandings(force) {
+        if (!activeLeague || standingsFetcher.running) return;
+        if (!force && !_canFetch(_lastStandingsFetch, _standingsCacheMs)) return;
+
+        var url = Api.buildStandingsUrl(activeLeague);
+        if (!url) return;
+
+        standingsLoading = true;
+        _lastStandingsFetch = _now();
+        standingsFetcher.output = "";
+        standingsFetcher.command = _buildStandingsFetchCommand(url);
+        standingsFetcher.running = true;
+    }
+
     function fetchMatchday(force) {
         if (!activeLeague || currentMatchday <= 0 || !_season) return;
         if (matchdayFetcher.running) return;
@@ -531,6 +586,7 @@ PluginComponent {
         onTriggered: {
             root.fetchPage();
             if (root.currentTab === 1) root.fetchMatchday();
+            if (root.currentTab === 2) root.fetchStandings();
             // Re-queue live matches for goal updates
             if (root.hasLive) root._enqueueGoalFetches(root.matches, true);
             // Refresh pinned match if in different league
@@ -545,8 +601,10 @@ PluginComponent {
         if (currentTab === 1) {
             if (currentMatchday > 0 && _season && matchdayMatches.length === 0)
                 fetchMatchday(true);
+        } else if (currentTab === 2) {
+            if (standings.length === 0 || _canFetch(_lastStandingsFetch, _standingsCacheMs))
+                fetchStandings(true);
         }
-        // Standings are loaded with the main page fetch, no separate fetch needed
     }
 
     // When matchday is resolved, auto-fetch if the matchday tab is active
