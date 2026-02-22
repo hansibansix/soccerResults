@@ -185,14 +185,12 @@ function groupByDate(matches) {
     return result;
 }
 
-function findPillMatch(matches, matchdayMatches, pinnedId) {
+function findPillMatch(matches, matchdayMatches, pinnedData) {
+    // Pinned match always wins if available
+    if (pinnedData && pinnedData.id) return pinnedData;
+    // Otherwise priority from current data: live > upcoming > finished > first
     var all = (matches || []).concat(matchdayMatches || []);
     if (all.length === 0) return null;
-    if (pinnedId) {
-        for (var i = 0; i < all.length; i++)
-            if (all[i].id === pinnedId) return all[i];
-    }
-    // Priority from main matches: live > upcoming > finished > first
     var primary = matches && matches.length > 0 ? matches : all;
     var checks = [isLive, isUpcoming, isFinished];
     for (var c = 0; c < checks.length; c++) {

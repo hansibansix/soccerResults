@@ -44,6 +44,8 @@ PluginComponent {
 
     // === Pinned match ===
     property string pinnedMatchId: ""
+    property string _pinnedLeague: ""
+    property var _pinnedMatchData: null
 
     // === Goal data ===
     property var _goalQueue: []
@@ -60,7 +62,7 @@ PluginComponent {
     readonly property string _scriptPath: Qt.resolvedUrl("parse_kicker.py").toString().replace("file://", "")
 
     // === Pill helpers ===
-    readonly property var pillMatch: Api.findPillMatch(matches, matchdayMatches, pinnedMatchId)
+    readonly property var pillMatch: Api.findPillMatch(matches, matchdayMatches, _pinnedMatchData)
     readonly property bool pillLive: pillMatch ? Api.isLive(pillMatch.status) : false
 
     // === Helpers ===
@@ -145,9 +147,49 @@ PluginComponent {
     function switchLeague(code) {
         if (code === activeLeague) return;
         activeLeague = code;
-        pinnedMatchId = "";
         _resetAllData();
         fetchPage(true);
+    }
+
+    function pinMatch(matchId, leagueCode) {
+        if (pinnedMatchId === matchId) {
+            // Unpin
+            pinnedMatchId = "";
+            _pinnedLeague = "";
+            _pinnedMatchData = null;
+            return;
+        }
+        pinnedMatchId = matchId;
+        _pinnedLeague = leagueCode || activeLeague;
+        // Find the match data in current lists
+        var allMatches = (matches || []).concat(matchdayMatches || []);
+        for (var i = 0; i < allMatches.length; i++) {
+            if (allMatches[i].id === matchId) {
+                _pinnedMatchData = allMatches[i];
+                return;
+            }
+        }
+    }
+
+    function _updatePinnedFromMatches(matchList) {
+        if (!pinnedMatchId) return;
+        for (var i = 0; i < matchList.length; i++) {
+            if (matchList[i].id === pinnedMatchId) {
+                _pinnedMatchData = matchList[i];
+                return;
+            }
+        }
+    }
+
+    function _fetchPinnedMatch() {
+        if (!pinnedMatchId || !_pinnedLeague || pinnedFetcher.running) return;
+        // If pinned match is in the active league, it gets updated via pageFetcher already
+        if (_pinnedLeague === activeLeague) return;
+        var url = Api.buildPageUrl(_pinnedLeague);
+        if (!url) return;
+        pinnedFetcher.output = "";
+        pinnedFetcher.command = _buildFetchCommand(url);
+        pinnedFetcher.running = true;
     }
 
     // === Fetch: main page (matches + standings + matchday) ===
@@ -194,6 +236,11 @@ PluginComponent {
 
                 // Enqueue goal fetches for finished + live matches
                 root._enqueueGoalFetches(result.matches, false);
+
+                // Update pinned match if it's in this league
+                root._updatePinnedFromMatches(result.matches);
+                // Fetch pinned match separately if in different league
+                root._fetchPinnedMatch();
             } catch (e) {
                 console.warn("[soccerResults] Parse error: " + e);
                 root.errorMessage = "Failed to parse data";
@@ -224,6 +271,30 @@ PluginComponent {
 
             // Fetch next in queue
             root._fetchNextGoal();
+        }
+    }
+
+    // === Fetch: pinned match (when in different league) ===
+    Process {
+        id: pinnedFetcher
+        property string output: ""
+        stdout: SplitParser { onRead: line => { pinnedFetcher.output += line + "\n"; } }
+
+        onExited: (exitCode) => {
+            if (exitCode === 0 && pinnedFetcher.output.trim()) {
+                var data = root._parseResponse(pinnedFetcher.output);
+                if (!data.error) {
+                    try {
+                        var result = Api.parsePageData(JSON.stringify(data));
+                        if (!result.error) {
+                            root._updatePinnedFromMatches(result.matches);
+                        }
+                    } catch (e) {
+                        console.warn("[soccerResults] Pinned match parse error: " + e);
+                    }
+                }
+            }
+            pinnedFetcher.output = "";
         }
     }
 
@@ -297,11 +368,13 @@ PluginComponent {
     }
 
     // === Polling timer ===
+    readonly property bool _pinnedIsLive: _pinnedMatchData ? Api.isLive(_pinnedMatchData.status) : false
+
     Timer {
         id: pollTimer
-        // Live: 60s, has matches: 5min, no matches: 15min
+        // Live (or pinned live): 60s, has matches: 5min, no matches: 15min
         interval: {
-            if (root.hasLive) return 60000;
+            if (root.hasLive || root._pinnedIsLive) return 60000;
             if (root.matches.length > 0) return Math.max(root.refreshIntervalMinutes * 60 * 1000, 180000);
             return 900000; // 15min when no matches today
         }
@@ -312,6 +385,8 @@ PluginComponent {
             if (root.currentTab === 1) root.fetchMatchday();
             // Re-queue live matches for goal updates
             if (root.hasLive) root._enqueueGoalFetches(root.matches, true);
+            // Refresh pinned match if in different league
+            root._fetchPinnedMatch();
         }
     }
 
@@ -499,8 +574,8 @@ PluginComponent {
             }
             onLeagueSelected: function(code) { root.switchLeague(code); }
             onTabChanged: function(tab) { root.currentTab = tab; }
-            onMatchPinned: function(matchId) {
-                root.pinnedMatchId = (root.pinnedMatchId === matchId) ? "" : matchId;
+            onMatchPinned: function(matchId, leagueCode) {
+                root.pinMatch(matchId, leagueCode);
             }
         }
     }

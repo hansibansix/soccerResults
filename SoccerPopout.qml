@@ -35,7 +35,7 @@ PopoutComponent {
     signal refreshRequested()
     signal leagueSelected(string code)
     signal tabChanged(int tab)
-    signal matchPinned(string matchId)
+    signal matchPinned(string matchId, string leagueCode)
 
     readonly property var leagueOptions: [
         { code: "PL",  label: "PL" },
@@ -352,7 +352,7 @@ PopoutComponent {
                     matchData: modelData
                     goals: matchData ? (popout.matchGoals[matchData.id] || []) : []
                     pinned: matchData ? matchData.id === popout.pinnedMatchId : false
-                    onPinClicked: popout.matchPinned(matchData.id)
+                    onPinClicked: popout.matchPinned(matchData.id, popout.activeLeague)
                 }
             }
         }
@@ -572,7 +572,7 @@ PopoutComponent {
             matchData: null
             goals: matchData ? (popout.matchGoals[matchData.id] || []) : []
             pinned: matchData ? matchData.id === popout.pinnedMatchId : false
-            onPinClicked: { if (matchData) popout.matchPinned(matchData.id); }
+            onPinClicked: { if (matchData) popout.matchPinned(matchData.id, popout.activeLeague); }
         }
     }
 

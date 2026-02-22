@@ -1,7 +1,7 @@
 {
     "id": "soccerResults",
     "name": "Soccer Results",
-    "description": "Live soccer/football scores and results from football-data.org",
+    "description": "Live soccer/football scores and standings from kicker.de",
     "version": "1.0.0",
     "author": "hansibansix",
     "icon": "sports_soccer",
