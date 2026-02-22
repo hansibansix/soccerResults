@@ -98,13 +98,17 @@ def extract_scores(row_html):
 
 def extract_status(row_html):
     """Determine match status and live minute from stateCell."""
-    # Halftime pause: indicator--pause class (checked before --live)
+    # Pause indicator: used for halftime AND end-of-regulation pause
     if "indicator--pause" in row_html:
         minute_m = re.search(
             r'indicator--pause[^>]*>.*?<span>\s*(\d+)\'\s*</span>',
             row_html, re.DOTALL
         )
-        return "PAUSED", minute_m.group(1) if minute_m else None
+        minute = minute_m.group(1) if minute_m else None
+        # Only treat as halftime if minute <= 45; otherwise it's a live pause (extra time etc.)
+        if minute and int(minute) > 45:
+            return "IN_PLAY", minute
+        return "PAUSED", minute
 
     # Live match: indicator--live class with minute text
     if "indicator--live" in row_html:

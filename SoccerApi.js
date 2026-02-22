@@ -53,8 +53,7 @@ function buildMatchdayPageUrl(leagueCode, season, matchday) {
     return _kickerBase + entry.slug + "/spieltag/" + season + "/" + matchday;
 }
 
-function parsePageData(jsonString) {
-    var data = JSON.parse(jsonString);
+function parsePageData(data) {
     if (data.error)
         return { error: data.error };
 
@@ -185,17 +184,23 @@ function groupByDate(matches) {
     return result;
 }
 
-function findPillMatch(matches, matchdayMatches, pinnedData) {
+function findFavoriteTeamMatch(matches, teamName) {
+    if (!matches || !teamName) return null;
+    var needle = teamName.toLowerCase();
+    for (var i = 0; i < matches.length; i++) {
+        var m = matches[i];
+        if ((m.homeTeam && m.homeTeam.toLowerCase().indexOf(needle) >= 0) ||
+            (m.awayTeam && m.awayTeam.toLowerCase().indexOf(needle) >= 0))
+            return m;
+    }
+    return null;
+}
+
+function findPillMatch(pinnedData, favoriteData) {
     // Pinned match always wins if available
     if (pinnedData && pinnedData.id) return pinnedData;
-    // Otherwise priority from current data: live > upcoming > finished > first
-    var all = (matches || []).concat(matchdayMatches || []);
-    if (all.length === 0) return null;
-    var primary = matches && matches.length > 0 ? matches : all;
-    var checks = [isLive, isUpcoming, isFinished];
-    for (var c = 0; c < checks.length; c++) {
-        for (var j = 0; j < primary.length; j++)
-            if (checks[c](primary[j].status)) return primary[j];
-    }
-    return primary[0];
+    // Favorite team's live match takes second priority
+    if (favoriteData && favoriteData.id && isLive(favoriteData.status)) return favoriteData;
+    // No pinned or favorite-live — show icon only
+    return null;
 }

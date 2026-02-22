@@ -25,69 +25,76 @@ PluginSettings {
 
     StyledRect {
         width: parent.width
-        height: leagueColumn.implicitHeight + Theme.spacingL * 2
-        radius: Theme.cornerRadius
-        color: Theme.surfaceContainerHigh
+        height: 1
+        color: Theme.outlineVariant
+    }
 
-        Column {
-            id: leagueColumn
-            anchors.fill: parent
-            anchors.margins: Theme.spacingL
-            spacing: Theme.spacingM
-
-            StyledText {
-                text: "League"
-                font.pixelSize: Theme.fontSizeMedium
-                font.weight: Font.Medium
-                color: Theme.surfaceText
-            }
-
-            SelectionSetting {
-                settingKey: "league"
-                label: "League"
-                description: "Which competition to follow"
-                options: [
-                    {label: "Premier League", value: "PL"},
-                    {label: "La Liga", value: "PD"},
-                    {label: "Bundesliga", value: "BL1"},
-                    {label: "2. Bundesliga", value: "BL2"},
-                    {label: "3. Liga", value: "BL3"},
-                    {label: "Serie A", value: "SA"},
-                    {label: "Ligue 1", value: "FL1"},
-                    {label: "Champions League", value: "CL"}
-                ]
-                defaultValue: "PL"
-            }
-        }
+    SelectionSetting {
+        settingKey: "league"
+        label: "League"
+        description: "Which competition to follow"
+        options: [
+            {label: "Premier League", value: "PL"},
+            {label: "La Liga", value: "PD"},
+            {label: "Bundesliga", value: "BL1"},
+            {label: "2. Bundesliga", value: "BL2"},
+            {label: "3. Liga", value: "BL3"},
+            {label: "Serie A", value: "SA"},
+            {label: "Ligue 1", value: "FL1"},
+            {label: "Champions League", value: "CL"}
+        ]
+        defaultValue: "PL"
     }
 
     StyledRect {
         width: parent.width
-        height: refreshColumn.implicitHeight + Theme.spacingL * 2
-        radius: Theme.cornerRadius
-        color: Theme.surfaceContainerHigh
+        height: 1
+        color: Theme.outlineVariant
+    }
 
-        Column {
-            id: refreshColumn
-            anchors.fill: parent
-            anchors.margins: Theme.spacingL
-            spacing: Theme.spacingM
+    StyledText {
+        width: parent.width
+        text: "Favorite Team"
+        font.pixelSize: Theme.fontSizeMedium
+        font.weight: Font.Medium
+        color: Theme.surfaceText
+    }
 
-            StyledText {
-                text: "Refresh"
-                font.pixelSize: Theme.fontSizeMedium
-                font.weight: Font.Medium
-                color: Theme.surfaceText
-            }
+    StyledText {
+        width: parent.width
+        text: "When your favorite team has a live match, it will automatically appear in the bar pill (unless a match is manually pinned)."
+        font.pixelSize: Theme.fontSizeSmall
+        color: Theme.surfaceVariantText
+        wrapMode: Text.WordWrap
+        lineHeight: 1.4
+    }
 
-            StringSetting {
-                settingKey: "refreshInterval"
-                label: "Refresh Interval (minutes)"
-                description: "Base polling interval — auto-reduces to 1 min during live matches"
-                placeholder: "2"
-                defaultValue: "2"
-            }
-        }
+    StringSetting {
+        settingKey: "favoriteTeam"
+        label: "Team Name"
+        description: "As shown on kicker.de (e.g. VfB Stuttgart, Bayern München). All leagues are scanned automatically."
+        placeholder: "e.g. VfB Stuttgart"
+        defaultValue: ""
+    }
+
+    StyledRect {
+        width: parent.width
+        height: 1
+        color: Theme.outlineVariant
+    }
+
+    StringSetting {
+        settingKey: "refreshInterval"
+        label: "Refresh Interval (minutes)"
+        description: "Base polling interval — auto-reduces to 1 min during live matches"
+        placeholder: "2"
+        defaultValue: "2"
+    }
+
+    StyledRect {
+        width: parent.width
+        height: 1
+        color: Theme.outlineVariant
     }
 
     StyledRect {

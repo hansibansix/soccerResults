@@ -42,6 +42,16 @@ PluginComponent {
     property bool standingsLoading: false
     property string standingsError: ""
 
+    // === Favorite team ===
+    readonly property string favoriteTeam: pluginData.favoriteTeam || ""
+    property var _favoriteMatchData: null
+    property var _favoriteLeagueQueue: []
+    property int _favoriteLeagueQueueIdx: 0
+    property string _favoriteLeagueCache: ""        // league where team was last found
+    property string _currentFavFetchLeague: ""      // league currently being fetched
+    property real _lastFavoriteScan: 0
+    readonly property int _favoriteScanIntervalMs: 600000   // 10 min between full scans
+
     // === Pinned match ===
     property string pinnedMatchId: ""
     property string _pinnedLeague: ""
@@ -49,10 +59,13 @@ PluginComponent {
 
     // === Goal data ===
     property var _goalQueue: []
+    property int _goalQueueIdx: 0
     property var _matchGoals: ({})
     property string _currentGoalMatchId: ""
 
     // === Rate limit / caching ===
+    property string _fetchingLeague: ""                               // league pageFetcher is currently fetching
+    property int _fetchGeneration: 0                                  // incremented on each league switch to discard stale results
     property real _lastPageFetch: 0
     property real _lastMatchdayFetch: 0
     readonly property int _minFetchIntervalMs: 30000          // 30s min between same-endpoint fetches
@@ -62,7 +75,7 @@ PluginComponent {
     readonly property string _scriptPath: Qt.resolvedUrl("parse_kicker.py").toString().replace("file://", "")
 
     // === Pill helpers ===
-    readonly property var pillMatch: Api.findPillMatch(matches, matchdayMatches, _pinnedMatchData)
+    readonly property var pillMatch: Api.findPillMatch(_pinnedMatchData, _favoriteMatchData)
     readonly property bool pillLive: pillMatch ? Api.isLive(pillMatch.status) : false
 
     // === Helpers ===
@@ -73,6 +86,16 @@ PluginComponent {
     }
 
     function _resetAllData() {
+        _resetLeagueData();
+        _favoriteMatchData = null;
+        _favoriteLeagueQueue = [];
+        _favoriteLeagueQueueIdx = 0;
+        _favoriteLeagueCache = "";
+        _currentFavFetchLeague = "";
+        _lastFavoriteScan = 0;
+    }
+
+    function _resetLeagueData() {
         matches = [];
         matchdayMatches = [];
         standings = [];
@@ -86,6 +109,7 @@ PluginComponent {
         _lastPageFetch = 0;
         _lastMatchdayFetch = 0;
         _goalQueue = [];
+        _goalQueueIdx = 0;
         _matchGoals = {};
         _currentGoalMatchId = "";
     }
@@ -95,20 +119,22 @@ PluginComponent {
         for (var i = 0; i < matchList.length; i++) {
             var m = matchList[i];
             if (!m.id) continue;
-            if (liveOnly) {
-                if (Api.isLive(m.status)) queue.push(m.id);
-            } else {
-                if (Api.isFinished(m.status) || Api.isLive(m.status)) queue.push(m.id);
+            if (Api.isLive(m.status)) {
+                queue.push(m.id);
+            } else if (!liveOnly && Api.isFinished(m.status) && !_matchGoals[m.id]) {
+                // Only fetch finished match goals if not already cached
+                queue.push(m.id);
             }
         }
         _goalQueue = queue;
+        _goalQueueIdx = 0;
         _fetchNextGoal();
     }
 
     function _fetchNextGoal() {
-        if (goalFetcher.running || _goalQueue.length === 0) return;
-        var matchId = _goalQueue[0];
-        _goalQueue = _goalQueue.slice(1);
+        if (goalFetcher.running || _goalQueueIdx >= _goalQueue.length) return;
+        var matchId = _goalQueue[_goalQueueIdx];
+        _goalQueueIdx++;
         _currentGoalMatchId = matchId;
         var url = Api.buildMatchGoalsUrl(matchId);
         goalFetcher.output = "";
@@ -120,12 +146,14 @@ PluginComponent {
         return _matchGoals[matchId] || [];
     }
 
+    readonly property string _userAgent: "Mozilla/5.0 (X11; Linux x86_64; rv:137.0) Gecko/20100101 Firefox/137.0"
+
     function _buildFetchCommand(url) {
-        return ["bash", "-c", "curl -sS --connect-timeout 10 --max-time 15 '" + url + "' | python3 '" + _scriptPath + "'"];
+        return ["bash", "-c", "curl -sS --connect-timeout 10 --max-time 15 -A '" + _userAgent + "' '" + url + "' | python3 '" + _scriptPath + "'"];
     }
 
     function _buildGoalsFetchCommand(url) {
-        return ["bash", "-c", "curl -sS --connect-timeout 10 --max-time 15 '" + url + "' | python3 '" + _scriptPath + "' --goals"];
+        return ["bash", "-c", "curl -sS --connect-timeout 10 --max-time 15 -A '" + _userAgent + "' '" + url + "' | python3 '" + _scriptPath + "' --goals"];
     }
 
     function _parseResponse(output) {
@@ -146,9 +174,16 @@ PluginComponent {
 
     function switchLeague(code) {
         if (code === activeLeague) return;
+        _fetchGeneration++;
         activeLeague = code;
-        _resetAllData();
-        fetchPage(true);
+        _resetLeagueData();
+        loading = true;
+        if (pageFetcher.running) {
+            // Kill stale fetch — onExited will detect stale generation and re-fetch
+            pageFetcher.running = false;
+        }
+        // Always schedule a fetch — Qt.callLater ensures it runs after any pending onExited
+        Qt.callLater(fetchPage, true);
     }
 
     function pinMatch(matchId, leagueCode) {
@@ -192,13 +227,91 @@ PluginComponent {
         pinnedFetcher.running = true;
     }
 
+    function _updateFavoriteFromMatches(matchList, leagueCode) {
+        if (!favoriteTeam) return;
+        var found = Api.findFavoriteTeamMatch(matchList, favoriteTeam);
+        if (!found) return;
+        // Don't overwrite a live match with a non-live one
+        if (_favoriteMatchData && Api.isLive(_favoriteMatchData.status) && !Api.isLive(found.status)) return;
+        _favoriteMatchData = found;
+        if (leagueCode) _favoriteLeagueCache = leagueCode;
+    }
+
+    function _fetchFavoriteMatch() {
+        if (!favoriteTeam || favoriteFetcher.running) return;
+
+        // 1) If favorite is already live in a cached league, just refresh that one
+        if (_favoriteIsLive && _favoriteLeagueCache) {
+            if (_favoriteLeagueCache === activeLeague) {
+                _updateFavoriteFromMatches(matches, activeLeague);
+            } else {
+                _startFavoriteFetch(_favoriteLeagueCache);
+            }
+            return;
+        }
+
+        // 2) Check active league (free — already fetched by pageFetcher)
+        _updateFavoriteFromMatches(matches, activeLeague);
+        if (_favoriteMatchData && Api.isLive(_favoriteMatchData.status)) return;
+
+        // 3) Full scan of other leagues — rate-limited
+        if (_favoriteLeagueQueueIdx < _favoriteLeagueQueue.length) return;
+        if (_lastFavoriteScan > 0 && (_now() - _lastFavoriteScan) < _favoriteScanIntervalMs) return;
+        _lastFavoriteScan = _now();
+
+        var codes = Object.keys(Api.leagueMap);
+        var queue = [];
+        for (var i = 0; i < codes.length; i++) {
+            if (codes[i] !== activeLeague) queue.push(codes[i]);
+        }
+        _favoriteLeagueQueue = queue;
+        _favoriteLeagueQueueIdx = 0;
+        _fetchNextFavoriteLeague();
+    }
+
+    function _startFavoriteFetch(leagueCode) {
+        var url = Api.buildPageUrl(leagueCode);
+        if (!url) return;
+        _currentFavFetchLeague = leagueCode;
+        _favoriteLeagueQueue = [];
+        _favoriteLeagueQueueIdx = 0;
+        favoriteFetcher.output = "";
+        favoriteFetcher.command = _buildFetchCommand(url);
+        favoriteFetcher.running = true;
+    }
+
+    function _fetchNextFavoriteLeague() {
+        if (favoriteFetcher.running || _favoriteLeagueQueueIdx >= _favoriteLeagueQueue.length) return;
+        // Stop scanning if we found a live match
+        if (_favoriteMatchData && Api.isLive(_favoriteMatchData.status)) return;
+        var code = _favoriteLeagueQueue[_favoriteLeagueQueueIdx];
+        _favoriteLeagueQueueIdx++;
+        _currentFavFetchLeague = code;
+        var url = Api.buildPageUrl(code);
+        if (!url) { _fetchNextFavoriteLeague(); return; }
+        favoriteFetcher.output = "";
+        favoriteFetcher.command = _buildFetchCommand(url);
+        favoriteFetcher.running = true;
+    }
+
     // === Fetch: main page (matches + standings + matchday) ===
     Process {
         id: pageFetcher
         property string output: ""
+        property int generation: 0
         stdout: SplitParser { onRead: line => { pageFetcher.output += line + "\n"; } }
 
         onExited: (exitCode) => {
+            root._fetchingLeague = "";
+
+            // Stale fetch (league changed since this fetch started) — discard and re-fetch
+            if (pageFetcher.generation !== root._fetchGeneration) {
+                pageFetcher.output = "";
+                // Process is now dead, so fetchPage can start a new one
+                Qt.callLater(root.fetchPage, true);
+                return;
+            }
+
             root.loading = false;
             root.standingsLoading = false;
 
@@ -217,7 +330,7 @@ PluginComponent {
             }
 
             try {
-                var result = Api.parsePageData(JSON.stringify(data));
+                var result = Api.parsePageData(data);
                 if (result.error) {
                     root.errorMessage = result.error;
                     return;
@@ -241,6 +354,9 @@ PluginComponent {
                 root._updatePinnedFromMatches(result.matches);
                 // Fetch pinned match separately if in different league
                 root._fetchPinnedMatch();
+
+                // Scan all leagues for favorite team's live match
+                root._fetchFavoriteMatch();
             } catch (e) {
                 console.warn("[soccerResults] Parse error: " + e);
                 root.errorMessage = "Failed to parse data";
@@ -285,7 +401,7 @@ PluginComponent {
                 var data = root._parseResponse(pinnedFetcher.output);
                 if (!data.error) {
                     try {
-                        var result = Api.parsePageData(JSON.stringify(data));
+                        var result = Api.parsePageData(data);
                         if (!result.error) {
                             root._updatePinnedFromMatches(result.matches);
                         }
@@ -298,6 +414,35 @@ PluginComponent {
         }
     }
 
+    // === Fetch: favorite team match (scans all leagues sequentially) ===
+    Process {
+        id: favoriteFetcher
+        property string output: ""
+        stdout: SplitParser { onRead: line => { favoriteFetcher.output += line + "\n"; } }
+
+        onExited: (exitCode) => {
+            var league = root._currentFavFetchLeague;
+            root._currentFavFetchLeague = "";
+
+            if (exitCode === 0 && favoriteFetcher.output.trim()) {
+                var data = root._parseResponse(favoriteFetcher.output);
+                if (!data.error) {
+                    try {
+                        var result = Api.parsePageData(data);
+                        if (!result.error) {
+                            root._updateFavoriteFromMatches(result.matches, league);
+                        }
+                    } catch (e) {
+                        console.warn("[soccerResults] Favorite match parse error: " + e);
+                    }
+                }
+            }
+            favoriteFetcher.output = "";
+            // Continue scanning remaining leagues
+            root._fetchNextFavoriteLeague();
+        }
+    }
+
     function fetchPage(force) {
         if (!activeLeague || pageFetcher.running) return;
         if (!force && !_canFetch(_lastPageFetch, _minFetchIntervalMs)) return;
@@ -307,8 +452,10 @@ PluginComponent {
 
         loading = true;
         standingsLoading = true;
+        _fetchingLeague = activeLeague;
         _lastPageFetch = _now();
         pageFetcher.output = "";
+        pageFetcher.generation = _fetchGeneration;
         pageFetcher.command = _buildFetchCommand(url);
         pageFetcher.running = true;
     }
@@ -337,7 +484,7 @@ PluginComponent {
             }
 
             try {
-                var result = Api.parsePageData(JSON.stringify(data));
+                var result = Api.parsePageData(data);
                 if (result.error) {
                     root.matchdayError = result.error;
                     return;
@@ -369,12 +516,13 @@ PluginComponent {
 
     // === Polling timer ===
     readonly property bool _pinnedIsLive: _pinnedMatchData ? Api.isLive(_pinnedMatchData.status) : false
+    readonly property bool _favoriteIsLive: _favoriteMatchData ? Api.isLive(_favoriteMatchData.status) : false
 
     Timer {
         id: pollTimer
-        // Live (or pinned live): 60s, has matches: 5min, no matches: 15min
+        // Live (or pinned/favorite live): 60s, has matches: 5min, no matches: 15min
         interval: {
-            if (root.hasLive || root._pinnedIsLive) return 60000;
+            if (root.hasLive || root._pinnedIsLive || root._favoriteIsLive) return 60000;
             if (root.matches.length > 0) return Math.max(root.refreshIntervalMinutes * 60 * 1000, 180000);
             return 900000; // 15min when no matches today
         }
@@ -387,6 +535,8 @@ PluginComponent {
             if (root.hasLive) root._enqueueGoalFetches(root.matches, true);
             // Refresh pinned match if in different league
             root._fetchPinnedMatch();
+            // Refresh favorite match if in different league
+            root._fetchFavoriteMatch();
         }
     }
 
@@ -403,6 +553,16 @@ PluginComponent {
     onCurrentMatchdayChanged: {
         if (currentMatchday > 0 && _season && currentTab === 1 && matchdayMatches.length === 0)
             fetchMatchday(true);
+    }
+
+    // === React to favorite team setting changes ===
+    onFavoriteTeamChanged: {
+        _favoriteMatchData = null;
+        _favoriteLeagueQueue = [];
+        _favoriteLeagueQueueIdx = 0;
+        _favoriteLeagueCache = "";
+        _lastFavoriteScan = 0;
+        if (favoriteTeam) _fetchFavoriteMatch();
     }
 
     // === React to default league setting changes (also handles late pluginData arrival) ===
@@ -430,6 +590,7 @@ PluginComponent {
         if (loading && matches.length === 0) return "Loading...";
         if (errorMessage) return errorMessage;
         if (pillMatch) return Api.pillText(pillMatch);
+        if (matches.length > 0) return matches.length + " matches today";
         return "No matches today";
     }
     ccWidgetIsActive: matches.length > 0
@@ -446,7 +607,7 @@ PluginComponent {
                 width: root.iconSize
                 height: root.iconSize
                 fillMode: Image.PreserveAspectFit
-                visible: source !== ""
+                visible: root.pillMatch && source !== ""
                 anchors.verticalCenter: parent.verticalCenter
             }
 
@@ -459,7 +620,8 @@ PluginComponent {
             }
 
             StyledText {
-                text: root.pillMatch ? Api.scoreText(root.pillMatch) : (root.errorMessage || "--")
+                visible: root.pillMatch !== null
+                text: root.pillMatch ? Api.scoreText(root.pillMatch) : ""
                 font.pixelSize: Theme.barTextSize(root.barThickness, root.barConfig?.fontScale)
                 font.weight: root.pillLive ? Font.Bold : Font.Normal
                 color: root.pillLive ? Theme.primary : Theme.surfaceVariantText
@@ -473,7 +635,7 @@ PluginComponent {
                 width: root.iconSize
                 height: root.iconSize
                 fillMode: Image.PreserveAspectFit
-                visible: source !== ""
+                visible: root.pillMatch && source !== ""
                 anchors.verticalCenter: parent.verticalCenter
             }
 
@@ -503,6 +665,14 @@ PluginComponent {
         Column {
             spacing: 2
 
+            DankIcon {
+                name: "sports_soccer"
+                size: root.iconSize
+                color: root.pillLive ? Theme.primary : Theme.surfaceVariantText
+                anchors.horizontalCenter: parent.horizontalCenter
+                visible: !root.pillMatch
+            }
+
             Image {
                 source: root.pillMatch ? root.pillMatch.homeCrest || "" : ""
                 sourceSize.width: root.iconSize
@@ -510,12 +680,13 @@ PluginComponent {
                 width: root.iconSize
                 height: root.iconSize
                 fillMode: Image.PreserveAspectFit
-                visible: source !== ""
+                visible: root.pillMatch && source !== ""
                 anchors.horizontalCenter: parent.horizontalCenter
             }
 
             StyledText {
-                text: root.pillMatch ? Api.scoreText(root.pillMatch) : "--"
+                visible: root.pillMatch !== null
+                text: root.pillMatch ? Api.scoreText(root.pillMatch) : ""
                 font.pixelSize: Theme.barTextSize(root.barThickness, root.barConfig?.fontScale)
                 font.weight: root.pillLive ? Font.Bold : Font.Normal
                 color: root.pillLive ? Theme.primary : Theme.surfaceVariantText
@@ -529,7 +700,7 @@ PluginComponent {
                 width: root.iconSize
                 height: root.iconSize
                 fillMode: Image.PreserveAspectFit
-                visible: source !== ""
+                visible: root.pillMatch && source !== ""
                 anchors.horizontalCenter: parent.horizontalCenter
             }
 
