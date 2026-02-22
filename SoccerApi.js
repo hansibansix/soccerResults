@@ -189,6 +189,33 @@ function groupByDate(matches) {
     return result;
 }
 
+function filterLive(matches) {
+    var result = [];
+    for (var i = 0; i < matches.length; i++) {
+        if (isLive(matches[i].status)) result.push(matches[i]);
+    }
+    return result;
+}
+
+function groupByLeague(matches) {
+    var leagueOrder = [];
+    var leagueMap_ = {};
+    for (var i = 0; i < matches.length; i++) {
+        var m = matches[i];
+        var code = m._leagueCode || "??";
+        if (!leagueMap_[code]) {
+            leagueMap_[code] = { league: m._leagueName || leagueName(code), code: code, matches: [] };
+            leagueOrder.push(code);
+        }
+        leagueMap_[code].matches.push(m);
+    }
+    var result = [];
+    for (var j = 0; j < leagueOrder.length; j++) {
+        result.push(leagueMap_[leagueOrder[j]]);
+    }
+    return result;
+}
+
 function findFavoriteTeamMatch(matches, teamName) {
     if (!matches || !teamName) return null;
     var needle = teamName.toLowerCase();

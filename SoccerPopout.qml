@@ -32,10 +32,17 @@ PopoutComponent {
     required property string pinnedMatchId
     required property var matchGoals
 
+    // Live mode
+    required property var liveMatches
+    required property bool liveLoading
+    required property string liveError
+    required property bool liveMode
+
     signal refreshRequested()
     signal leagueSelected(string code)
     signal tabChanged(int tab)
     signal matchPinned(string matchId, string leagueCode)
+    signal liveModeToggled()
 
     readonly property var leagueOptions: [
         { code: "PL",  label: "PL" },
@@ -61,10 +68,15 @@ PopoutComponent {
     ]
 
     readonly property var todayMatches: Api.filterToday(popout.matches)
-    readonly property bool anyLoading: loading || matchdayLoading || standingsLoading
+    readonly property bool anyLoading: loading || matchdayLoading || standingsLoading || liveLoading
 
-    headerText: Api.leagueName(activeLeague)
+    headerText: liveMode ? "Live Matches" : Api.leagueName(activeLeague)
     detailsText: {
+        if (liveMode) {
+            if (liveLoading) return "Scanning leagues...";
+            if (liveMatches.length > 0) return liveMatches.length + " live match" + (liveMatches.length !== 1 ? "es" : "");
+            return "No live matches";
+        }
         if (currentTab === 0) {
             if (loading) return "Updating...";
             if (todayMatches.length > 0) return todayMatches.length + " match" + (todayMatches.length !== 1 ? "es" : "") + " today";
@@ -86,6 +98,16 @@ PopoutComponent {
     headerActions: Component {
         Row {
             spacing: 4
+
+            DankActionButton {
+                visible: popout.liveMode
+                iconName: "arrow_back"
+                iconColor: Theme.surfaceVariantText
+                buttonSize: 28
+                tooltipText: "Back to leagues"
+                tooltipSide: "bottom"
+                onClicked: popout.liveModeToggled()
+            }
 
             DankActionButton {
                 iconName: "refresh"
@@ -112,12 +134,81 @@ PopoutComponent {
         width: parent.width
         height: 550
 
+        // === Live toggle ===
+        StyledRect {
+            id: liveToggle
+            y: 0
+            width: parent.width
+            height: 30
+            radius: Theme.cornerRadius
+            color: popout.liveMode
+                ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.15)
+                : Theme.surfaceContainerHigh
+
+            Behavior on color { ColorAnimation { duration: Theme.shortDuration } }
+
+            Row {
+                anchors.centerIn: parent
+                spacing: Theme.spacingS
+
+                DankIcon {
+                    name: "stream"
+                    size: 16
+                    color: popout.liveMode ? Theme.primary : Theme.surfaceVariantText
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+
+                StyledText {
+                    text: "Live"
+                    font.pixelSize: Theme.fontSizeSmall
+                    font.weight: popout.liveMode ? Font.Bold : Font.Normal
+                    color: popout.liveMode ? Theme.primary : Theme.surfaceVariantText
+                    anchors.verticalCenter: parent.verticalCenter
+                }
+
+                // Live match count badge
+                StyledRect {
+                    visible: popout.liveMatches.length > 0
+                    width: countText.implicitWidth + 10
+                    height: 16
+                    radius: 8
+                    color: Theme.primary
+                    anchors.verticalCenter: parent.verticalCenter
+
+                    StyledText {
+                        id: countText
+                        anchors.centerIn: parent
+                        text: popout.liveMatches.length
+                        font.pixelSize: Theme.fontSizeSmall - 2
+                        font.weight: Font.Bold
+                        color: Theme.onPrimary
+                    }
+                }
+            }
+
+            Rectangle {
+                visible: popout.liveMode
+                anchors.bottom: parent.bottom
+                anchors.horizontalCenter: parent.horizontalCenter
+                width: parent.width * 0.5
+                height: 2
+                radius: 1
+                color: Theme.primary
+            }
+
+            StateLayer {
+                enableRipple: false
+                onClicked: popout.liveModeToggled()
+            }
+        }
+
         // === League selector pills ===
         Row {
             id: leaguePills
-            y: 0
+            visible: !popout.liveMode
+            y: liveToggle.height + Theme.spacingXS
             width: parent.width
-            height: 28
+            height: visible ? 28 : 0
             spacing: Theme.spacingXS
 
             Repeater {
@@ -135,7 +226,7 @@ PopoutComponent {
                     height: 28
                     radius: Theme.cornerRadius
                     color: selected
-                        ? Theme.primaryContainer
+                        ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.15)
                         : Theme.surfaceContainerHigh
 
                     Behavior on color { ColorAnimation { duration: Theme.shortDuration } }
@@ -145,7 +236,17 @@ PopoutComponent {
                         text: modelData.label
                         font.pixelSize: Theme.fontSizeSmall
                         font.weight: selected ? Font.Bold : Font.Normal
-                        color: selected ? Theme.surfaceText : Theme.surfaceVariantText
+                        color: selected ? Theme.primary : Theme.surfaceVariantText
+                    }
+
+                    Rectangle {
+                        visible: selected
+                        anchors.bottom: parent.bottom
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        width: parent.width * 0.6
+                        height: 2
+                        radius: 1
+                        color: Theme.primary
                     }
 
                     StateLayer {
@@ -163,8 +264,8 @@ PopoutComponent {
         // === Bundesliga subtabs ===
         Row {
             id: blSubTabs
-            visible: popout.showBundesligaSubs
-            y: leaguePills.height + Theme.spacingXS
+            visible: popout.showBundesligaSubs && !popout.liveMode
+            y: leaguePills.y + leaguePills.height + Theme.spacingXS
             width: parent.width
             height: visible ? 24 : 0
             spacing: Theme.spacingXS
@@ -206,9 +307,10 @@ PopoutComponent {
         // === Tab bar ===
         Row {
             id: tabBar
-            y: leaguePills.height + (blSubTabs.visible ? blSubTabs.height + Theme.spacingXS : 0) + Theme.spacingXS
+            visible: !popout.liveMode
+            y: leaguePills.y + leaguePills.height + (blSubTabs.visible ? blSubTabs.height + Theme.spacingXS : 0) + (leaguePills.visible ? Theme.spacingXS : 0)
             width: parent.width
-            height: 38
+            height: visible ? 38 : 0
             spacing: Theme.spacingXS
 
             Repeater {
@@ -224,7 +326,7 @@ PopoutComponent {
                     height: 38
                     radius: Theme.cornerRadius
                     color: selected
-                        ? Theme.primaryContainer
+                        ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.15)
                         : Theme.surfaceContainerHigh
 
                     Behavior on color { ColorAnimation { duration: Theme.shortDuration } }
@@ -236,7 +338,7 @@ PopoutComponent {
                         DankIcon {
                             name: modelData.icon
                             size: 16
-                            color: selected ? Theme.surfaceText : Theme.surfaceVariantText
+                            color: selected ? Theme.primary : Theme.surfaceVariantText
                             anchors.verticalCenter: parent.verticalCenter
                         }
 
@@ -244,7 +346,7 @@ PopoutComponent {
                             text: modelData.label
                             font.pixelSize: Theme.fontSizeSmall
                             font.weight: selected ? Font.Bold : Font.Normal
-                            color: selected ? Theme.surfaceText : Theme.surfaceVariantText
+                            color: selected ? Theme.primary : Theme.surfaceVariantText
                             anchors.verticalCenter: parent.verticalCenter
                         }
                     }
@@ -253,9 +355,9 @@ PopoutComponent {
                         visible: selected
                         anchors.bottom: parent.bottom
                         anchors.horizontalCenter: parent.horizontalCenter
-                        width: parent.width * 0.5
-                        height: 2
-                        radius: 1
+                        width: parent.width * 0.7
+                        height: 2.5
+                        radius: 1.25
                         color: Theme.primary
                     }
 
@@ -270,7 +372,9 @@ PopoutComponent {
         // === Tab content ===
         DankFlickable {
             id: contentFlickable
-            y: tabBar.y + tabBar.height + Theme.spacingS
+            y: popout.liveMode
+                ? liveToggle.height + Theme.spacingS
+                : tabBar.y + tabBar.height + Theme.spacingS
             width: parent.width
             height: parent.height - y - 18
             contentHeight: contentLoader.item ? contentLoader.item.implicitHeight : height
@@ -280,6 +384,7 @@ PopoutComponent {
                 target: popout
                 function onActiveLeagueChanged() { contentFlickable.contentY = 0; }
                 function onCurrentTabChanged() { contentFlickable.contentY = 0; }
+                function onLiveModeChanged() { contentFlickable.contentY = 0; }
             }
 
             Loader {
@@ -287,7 +392,7 @@ PopoutComponent {
                 width: parent.width
 
                 readonly property var tabComponents: [todayTab, matchdayTab, standingsTab]
-                sourceComponent: tabComponents[popout.currentTab] || standingsTab
+                sourceComponent: popout.liveMode ? liveTab : (tabComponents[popout.currentTab] || standingsTab)
             }
         }
 
@@ -306,6 +411,98 @@ PopoutComponent {
     // ==============================
     // === Tab content components ===
     // ==============================
+
+    Component {
+        id: liveTab
+
+        ColumnLayout {
+            width: parent ? parent.width : 0
+            spacing: Theme.spacingS
+
+            Loader {
+                readonly property bool shouldShow: popout.liveError !== "" && popout.liveMatches.length === 0
+                Layout.fillWidth: true
+                Layout.preferredHeight: shouldShow ? -1 : 0
+                active: shouldShow
+                visible: shouldShow
+                sourceComponent: stateCard
+                onLoaded: {
+                    item.iconName = "cloud_off";
+                    item.iconColor = Theme.error;
+                    item.title = "Unable to scan for live matches";
+                    item.subtitle = popout.liveError;
+                    item.bgColor = Qt.rgba(Theme.error.r, Theme.error.g, Theme.error.b, 0.08);
+                }
+            }
+
+            Loader {
+                readonly property bool shouldShow: popout.liveError === "" && !popout.liveLoading && popout.liveMatches.length === 0
+                Layout.fillWidth: true
+                Layout.preferredHeight: shouldShow ? -1 : 0
+                active: shouldShow
+                visible: shouldShow
+                sourceComponent: stateCard
+                onLoaded: {
+                    item.iconName = "stream";
+                    item.title = "No live matches";
+                    item.subtitle = "Check back when games are being played";
+                }
+            }
+
+            Repeater {
+                model: Api.groupByLeague(popout.liveMatches)
+
+                delegate: ColumnLayout {
+                    required property var modelData
+                    required property int index
+                    Layout.fillWidth: true
+                    spacing: Theme.spacingXS
+
+                    // League header
+                    Item {
+                        Layout.fillWidth: true
+                        Layout.topMargin: index > 0 ? Theme.spacingS : 0
+                        implicitHeight: 28
+
+                        Row {
+                            anchors.left: parent.left
+                            anchors.leftMargin: Theme.spacingS
+                            anchors.verticalCenter: parent.verticalCenter
+                            spacing: Theme.spacingS
+
+                            Rectangle {
+                                width: 3; height: 14; radius: 1.5
+                                color: Theme.primary; opacity: 0.6
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+
+                            StyledText {
+                                text: modelData.league
+                                font.pixelSize: Theme.fontSizeSmall
+                                font.weight: Font.Bold
+                                color: Theme.primary
+                                anchors.verticalCenter: parent.verticalCenter
+                            }
+                        }
+                    }
+
+                    // Matches in this league
+                    Repeater {
+                        model: modelData.matches
+
+                        delegate: MatchCard {
+                            required property var modelData
+                            Layout.fillWidth: true
+                            matchData: modelData
+                            goals: matchData ? (popout.matchGoals[matchData.id] || []) : []
+                            pinned: matchData ? matchData.id === popout.pinnedMatchId : false
+                            onPinClicked: popout.matchPinned(matchData.id, matchData._leagueCode || popout.activeLeague)
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     Component {
         id: todayTab

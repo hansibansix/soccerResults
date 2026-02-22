@@ -21,6 +21,7 @@ PluginComponent {
 
     // === Tab state ===
     property int currentTab: 0  // 0=Today, 1=Matchday, 2=Table
+    property bool liveMode: false
 
     // === Today's matches state ===
     property var matches: []
@@ -41,6 +42,15 @@ PluginComponent {
     property var standingsGroups: []
     property bool standingsLoading: false
     property string standingsError: ""
+
+    // === Live scan state (all-league live matches) ===
+    property var liveMatches: []
+    property bool liveLoading: false
+    property string liveError: ""
+    property var _liveLeagueQueue: []
+    property int _liveLeagueQueueIdx: 0
+    property real _lastLiveScan: 0
+    readonly property int _liveScanCacheMs: 120000  // 2 min — live data is time-sensitive
 
     // === Favorite team ===
     readonly property string favoriteTeam: pluginData.favoriteTeam || ""
@@ -451,6 +461,77 @@ PluginComponent {
         }
     }
 
+    // === Fetch: live matches across all leagues ===
+    property var _liveAccumulator: []
+
+    Process {
+        id: liveFetcher
+        property string output: ""
+        stdout: SplitParser { onRead: line => { liveFetcher.output += line + "\n"; } }
+
+        onExited: (exitCode) => {
+            var idx = root._liveLeagueQueueIdx - 1;
+            var code = (idx >= 0 && idx < root._liveLeagueQueue.length)
+                ? root._liveLeagueQueue[idx] : "";
+
+            if (exitCode === 0 && liveFetcher.output.trim()) {
+                var data = root._parseResponse(liveFetcher.output);
+                if (!data.error) {
+                    try {
+                        var result = Api.parsePageData(data);
+                        if (!result.error) {
+                            var live = Api.filterLive(result.matches);
+                            if (live.length > 0) {
+                                var name = Api.leagueName(code);
+                                for (var i = 0; i < live.length; i++) {
+                                    live[i]._leagueCode = code;
+                                    live[i]._leagueName = name;
+                                }
+                                root._liveAccumulator = root._liveAccumulator.concat(live);
+                            }
+                        }
+                    } catch (e) {
+                        console.warn("[soccerResults] Live scan parse error: " + e);
+                    }
+                }
+            }
+            liveFetcher.output = "";
+            root._fetchNextLiveLeague();
+        }
+    }
+
+    function fetchLiveMatches(force) {
+        if (liveFetcher.running) return;
+        if (!force && !_canFetch(_lastLiveScan, _liveScanCacheMs)) return;
+
+        _lastLiveScan = _now();
+        liveLoading = true;
+        liveError = "";
+        _liveAccumulator = [];
+
+        var codes = Object.keys(Api.leagueMap);
+        _liveLeagueQueue = codes;
+        _liveLeagueQueueIdx = 0;
+        _fetchNextLiveLeague();
+    }
+
+    function _fetchNextLiveLeague() {
+        if (liveFetcher.running) return;
+        if (_liveLeagueQueueIdx >= _liveLeagueQueue.length) {
+            // Scan complete
+            liveMatches = _liveAccumulator;
+            liveLoading = false;
+            return;
+        }
+        var code = _liveLeagueQueue[_liveLeagueQueueIdx];
+        _liveLeagueQueueIdx++;
+        var url = Api.buildPageUrl(code);
+        if (!url) { _fetchNextLiveLeague(); return; }
+        liveFetcher.output = "";
+        liveFetcher.command = _buildFetchCommand(url);
+        liveFetcher.running = true;
+    }
+
     function fetchPage(force) {
         if (!activeLeague || pageFetcher.running) return;
         if (!force && !_canFetch(_lastPageFetch, _minFetchIntervalMs)) return;
@@ -585,6 +666,7 @@ PluginComponent {
         repeat: true
         onTriggered: {
             root.fetchPage();
+            if (root.liveMode) root.fetchLiveMatches();
             if (root.currentTab === 1) root.fetchMatchday();
             if (root.currentTab === 2) root.fetchStandings();
             // Re-queue live matches for goal updates
@@ -596,7 +678,11 @@ PluginComponent {
         }
     }
 
-    // === Lazy fetch on tab change ===
+    // === Lazy fetch on live mode / tab change ===
+    onLiveModeChanged: {
+        if (liveMode) fetchLiveMatches();
+    }
+
     onCurrentTabChanged: {
         if (currentTab === 1) {
             if (currentMatchday > 0 && _season && matchdayMatches.length === 0)
@@ -784,8 +870,13 @@ PluginComponent {
             standingsGroups: root.standingsGroups
             activeLeague: root.activeLeague
             currentTab: root.currentTab
+            liveMode: root.liveMode
             pinnedMatchId: root.pinnedMatchId
             matchGoals: root._matchGoals
+
+            liveMatches: root.liveMatches
+            liveLoading: root.liveLoading
+            liveError: root.liveError
 
             loading: root.loading
             matchdayLoading: root.matchdayLoading
@@ -803,6 +894,7 @@ PluginComponent {
             }
             onLeagueSelected: function(code) { root.switchLeague(code); }
             onTabChanged: function(tab) { root.currentTab = tab; }
+            onLiveModeToggled: { root.liveMode = !root.liveMode; }
             onMatchPinned: function(matchId, leagueCode) {
                 root.pinMatch(matchId, leagueCode);
             }
