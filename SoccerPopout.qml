@@ -13,6 +13,7 @@ PopoutComponent {
     // Matchday
     required property var matchdayMatches
     required property int currentMatchday
+    required property int defaultMatchday
     // Standings
     required property var standings
     required property var standingsGroups
@@ -43,6 +44,7 @@ PopoutComponent {
     signal tabChanged(int tab)
     signal matchPinned(string matchId, string leagueCode)
     signal liveModeToggled()
+    signal matchdayNavigated(int delta)
 
     readonly property var leagueOptions: [
         { code: "PL",  label: "PL" },
@@ -561,6 +563,72 @@ PopoutComponent {
         ColumnLayout {
             width: parent ? parent.width : 0
             spacing: Theme.spacingXS
+
+            // === Matchday navigation ===
+            StyledRect {
+                Layout.fillWidth: true
+                implicitHeight: 36
+                radius: Theme.cornerRadius
+                color: Theme.surfaceContainerHigh
+
+                DankActionButton {
+                    id: mdPrev
+                    anchors.left: parent.left
+                    anchors.leftMargin: Theme.spacingS
+                    anchors.verticalCenter: parent.verticalCenter
+                    iconName: "chevron_left"
+                    iconColor: popout.currentMatchday > 1 ? Theme.surfaceText : Theme.surfaceVariantText
+                    buttonSize: 28
+                    tooltipText: "Previous matchday"
+                    tooltipSide: "bottom"
+                    enabled: popout.currentMatchday > 1 && !popout.matchdayLoading
+                    opacity: enabled ? 1.0 : 0.3
+                    onClicked: popout.matchdayNavigated(-1)
+                }
+
+                Column {
+                    anchors.centerIn: parent
+                    spacing: 1
+
+                    StyledText {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        text: "Matchday " + popout.currentMatchday
+                        font.pixelSize: Theme.fontSizeSmall
+                        font.weight: Font.Bold
+                        color: Theme.surfaceText
+                    }
+
+                    StyledText {
+                        anchors.horizontalCenter: parent.horizontalCenter
+                        visible: popout.currentMatchday !== popout.defaultMatchday && popout.defaultMatchday > 0
+                        text: "Current: " + popout.defaultMatchday
+                        font.pixelSize: Theme.fontSizeSmall - 2
+                        color: Theme.primary
+                        opacity: 0.7
+
+                        MouseArea {
+                            anchors.fill: parent
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: popout.matchdayNavigated(popout.defaultMatchday - popout.currentMatchday)
+                        }
+                    }
+                }
+
+                DankActionButton {
+                    id: mdNext
+                    anchors.right: parent.right
+                    anchors.rightMargin: Theme.spacingS
+                    anchors.verticalCenter: parent.verticalCenter
+                    iconName: "chevron_right"
+                    iconColor: Theme.surfaceText
+                    buttonSize: 28
+                    tooltipText: "Next matchday"
+                    tooltipSide: "bottom"
+                    enabled: !popout.matchdayLoading
+                    opacity: enabled ? 1.0 : 0.3
+                    onClicked: popout.matchdayNavigated(1)
+                }
+            }
 
             Loader {
                 readonly property bool shouldShow: popout.matchdayError !== "" && popout.matchdayMatches.length === 0

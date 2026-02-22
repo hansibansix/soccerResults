@@ -33,6 +33,7 @@ PluginComponent {
     // === Matchday state ===
     property var matchdayMatches: []
     property int currentMatchday: 0
+    property int _defaultMatchday: 0  // the "current" matchday from the API
     property string _season: ""
     property bool matchdayLoading: false
     property string matchdayError: ""
@@ -113,6 +114,7 @@ PluginComponent {
         standings = [];
         standingsGroups = [];
         currentMatchday = 0;
+        _defaultMatchday = 0;
         _season = "";
         errorMessage = "";
         matchdayError = "";
@@ -362,7 +364,12 @@ PluginComponent {
                 root.errorMessage = "";
                 root._updateTimestamp();
 
-                if (result.matchday > 0) root.currentMatchday = result.matchday;
+                if (result.matchday > 0) {
+                    root._defaultMatchday = result.matchday;
+                    // Only update currentMatchday if user hasn't navigated away
+                    if (root.currentMatchday === 0 || root.currentMatchday === root._defaultMatchday)
+                        root.currentMatchday = result.matchday;
+                }
                 if (result.season) root._season = result.season;
 
                 // Enqueue goal fetches for finished + live matches
@@ -650,6 +657,15 @@ PluginComponent {
         matchdayFetcher.running = true;
     }
 
+    function navigateMatchday(delta) {
+        var next = currentMatchday + delta;
+        if (next < 1) return;
+        currentMatchday = next;
+        matchdayMatches = [];
+        _lastMatchdayFetch = 0;
+        fetchMatchday(true);
+    }
+
     // === Polling timer ===
     readonly property bool _pinnedIsLive: _pinnedMatchData ? Api.isLive(_pinnedMatchData.status) : false
     readonly property bool _favoriteIsLive: _favoriteMatchData ? Api.isLive(_favoriteMatchData.status) : false
@@ -866,6 +882,7 @@ PluginComponent {
             matches: root.matches
             matchdayMatches: root.matchdayMatches
             currentMatchday: root.currentMatchday
+            defaultMatchday: root._defaultMatchday
             standings: root.standings
             standingsGroups: root.standingsGroups
             activeLeague: root.activeLeague
@@ -895,6 +912,7 @@ PluginComponent {
             onLeagueSelected: function(code) { root.switchLeague(code); }
             onTabChanged: function(tab) { root.currentTab = tab; }
             onLiveModeToggled: { root.liveMode = !root.liveMode; }
+            onMatchdayNavigated: function(delta) { root.navigateMatchday(delta); }
             onMatchPinned: function(matchId, leagueCode) {
                 root.pinMatch(matchId, leagueCode);
             }
