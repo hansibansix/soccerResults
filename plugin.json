@@ -1,0 +1,16 @@
+{
+    "id": "soccerResults",
+    "name": "Soccer Results",
+    "description": "Live soccer/football scores and results from football-data.org",
+    "version": "1.0.0",
+    "author": "hansibansix",
+    "icon": "sports_soccer",
+    "type": "widget",
+    "component": "./SoccerResults.qml",
+    "settings": "./SoccerResultsSettings.qml",
+    "permissions": [
+        "settings_read",
+        "settings_write",
+        "process"
+    ]
+}
