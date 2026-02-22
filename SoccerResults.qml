@@ -13,9 +13,8 @@ PluginComponent {
     popoutHeight: 600
 
     // === Settings (read-only from pluginData) ===
-    readonly property string apiKey: pluginData.apiKey || ""
     readonly property int refreshIntervalMinutes: parseInt(pluginData.refreshInterval) || 2
-    readonly property string defaultLeague: pluginData.league || "PL"
+    readonly property string defaultLeague: pluginData.league || ""
 
     // === Active league (runtime, changeable from popout) ===
     property string activeLeague: ""
@@ -33,6 +32,7 @@ PluginComponent {
     // === Matchday state ===
     property var matchdayMatches: []
     property int currentMatchday: 0
+    property string _season: ""
     property bool matchdayLoading: false
     property string matchdayError: ""
 
@@ -43,27 +43,30 @@ PluginComponent {
     property string standingsError: ""
 
     // === Pinned match ===
-    property int pinnedMatchId: 0
+    property string pinnedMatchId: ""
+
+    // === Goal data ===
+    property var _goalQueue: []
+    property var _matchGoals: ({})
+    property string _currentGoalMatchId: ""
 
     // === Rate limit / caching ===
-    property real _lastMatchFetch: 0
-    property real _lastStandingsFetch: 0
+    property real _lastPageFetch: 0
     property real _lastMatchdayFetch: 0
-    property bool _rateLimited: false
     readonly property int _minFetchIntervalMs: 30000          // 30s min between same-endpoint fetches
-    readonly property int _standingsCacheMs: 1800000          // 30min — standings change ~weekly
     readonly property int _matchdayCacheMs: 600000            // 10min — matchday changes slowly
-    readonly property int _rateLimitBackoffMs: 120000         // 2min backoff after 429
+
+    // === Script path ===
+    readonly property string _scriptPath: Qt.resolvedUrl("parse_kicker.py").toString().replace("file://", "")
 
     // === Pill helpers ===
-    readonly property var pillMatch: Api.findPillMatch(matches, pinnedMatchId)
+    readonly property var pillMatch: Api.findPillMatch(matches, matchdayMatches, pinnedMatchId)
     readonly property bool pillLive: pillMatch ? Api.isLive(pillMatch.status) : false
 
     // === Helpers ===
     function _now() { return Date.now(); }
 
     function _canFetch(lastFetch, cacheMs) {
-        if (_rateLimited) return false;
         return (_now() - lastFetch) >= Math.max(cacheMs, _minFetchIntervalMs);
     }
 
@@ -73,54 +76,63 @@ PluginComponent {
         standings = [];
         standingsGroups = [];
         currentMatchday = 0;
+        _season = "";
         errorMessage = "";
         matchdayError = "";
         standingsError = "";
         lastUpdated = "";
-        _lastMatchFetch = 0;
-        _lastStandingsFetch = 0;
+        _lastPageFetch = 0;
         _lastMatchdayFetch = 0;
+        _goalQueue = [];
+        _matchGoals = {};
+        _currentGoalMatchId = "";
     }
 
-    function _buildCurlCommand(url) {
-        return [
-            "curl", "-sS", "--connect-timeout", "10", "--max-time", "15",
-            "-w", "\nHTTP_STATUS:%{http_code}",
-            "-H", "X-Auth-Token: " + apiKey,
-            url
-        ];
-    }
-
-    function _parseApiResponse(raw, exitCode) {
-        var idx = raw.lastIndexOf("HTTP_STATUS:");
-        var httpCode = idx >= 0 ? parseInt(raw.substring(idx + 12)) : 0;
-        var body = idx >= 0 ? raw.substring(0, idx) : raw;
-
-        if (exitCode !== 0 || !body)
-            return { error: "Failed to fetch data" };
-        if (httpCode === 401 || httpCode === 403)
-            return { error: "Invalid API key" };
-        if (httpCode === 429) {
-            _rateLimited = true;
-            rateLimitTimer.restart();
-            return { error: "Rate limited — retrying in 2min" };
+    function _enqueueGoalFetches(matchList, liveOnly) {
+        var queue = [];
+        for (var i = 0; i < matchList.length; i++) {
+            var m = matchList[i];
+            if (!m.id) continue;
+            if (liveOnly) {
+                if (Api.isLive(m.status)) queue.push(m.id);
+            } else {
+                if (Api.isFinished(m.status) || Api.isLive(m.status)) queue.push(m.id);
+            }
         }
-        if (httpCode >= 400)
-            return { error: "API error (HTTP " + httpCode + ")" };
-
-        _rateLimited = false;
-        return { body: body, error: null };
+        _goalQueue = queue;
+        _fetchNextGoal();
     }
 
-    function _handleFetchResult(fetcher, exitCode, onSuccess, onError) {
-        var parsed = _parseApiResponse(fetcher.output, exitCode);
-        fetcher.output = "";
-        if (parsed.error) { onError(parsed.error); return; }
+    function _fetchNextGoal() {
+        if (goalFetcher.running || _goalQueue.length === 0) return;
+        var matchId = _goalQueue[0];
+        _goalQueue = _goalQueue.slice(1);
+        _currentGoalMatchId = matchId;
+        var url = Api.buildMatchGoalsUrl(matchId);
+        goalFetcher.output = "";
+        goalFetcher.command = _buildGoalsFetchCommand(url);
+        goalFetcher.running = true;
+    }
+
+    function getMatchGoals(matchId) {
+        return _matchGoals[matchId] || [];
+    }
+
+    function _buildFetchCommand(url) {
+        return ["bash", "-c", "curl -sS --connect-timeout 10 --max-time 15 '" + url + "' | python3 '" + _scriptPath + "'"];
+    }
+
+    function _buildGoalsFetchCommand(url) {
+        return ["bash", "-c", "curl -sS --connect-timeout 10 --max-time 15 '" + url + "' | python3 '" + _scriptPath + "' --goals"];
+    }
+
+    function _parseResponse(output) {
+        if (!output || output.trim() === "")
+            return { error: "No response" };
         try {
-            onSuccess(parsed.body);
+            return JSON.parse(output);
         } catch (e) {
-            console.warn("[soccerResults] Parse error: " + e);
-            onError("Failed to parse data");
+            return { error: "Failed to parse response" };
         }
     }
 
@@ -133,122 +145,155 @@ PluginComponent {
     function switchLeague(code) {
         if (code === activeLeague) return;
         activeLeague = code;
-        pinnedMatchId = 0;
+        pinnedMatchId = "";
         _resetAllData();
-        fetchMatches(true);
-        fetchStandings(true);
+        fetchPage(true);
     }
 
-    // === Fetch: today's matches ===
+    // === Fetch: main page (matches + standings + matchday) ===
     Process {
-        id: matchFetcher
+        id: pageFetcher
         property string output: ""
-        stdout: SplitParser { onRead: line => { matchFetcher.output += line; } }
+        stdout: SplitParser { onRead: line => { pageFetcher.output += line + "\n"; } }
 
         onExited: (exitCode) => {
             root.loading = false;
-            root._handleFetchResult(matchFetcher, exitCode, function(body) {
-                var result = Api.parseMatches(body);
-                root.matches = result;
-                root.hasLive = Api.hasAnyLive(result);
+            root.standingsLoading = false;
+
+            if (exitCode !== 0 && !pageFetcher.output.trim()) {
+                root.errorMessage = "Failed to fetch data";
+                pageFetcher.output = "";
+                return;
+            }
+
+            var data = root._parseResponse(pageFetcher.output);
+            pageFetcher.output = "";
+
+            if (data.error) {
+                root.errorMessage = data.error;
+                return;
+            }
+
+            try {
+                var result = Api.parsePageData(JSON.stringify(data));
+                if (result.error) {
+                    root.errorMessage = result.error;
+                    return;
+                }
+
+                root.matches = result.matches;
+                root.hasLive = Api.hasAnyLive(result.matches);
+                root.standings = result.standings;
+                root.standingsGroups = [];
                 root.errorMessage = "";
+                root.standingsError = "";
                 root._updateTimestamp();
-                // Derive matchday from today's matches (most accurate)
-                var md = Api.extractMatchday(result);
-                if (md > 0) root.currentMatchday = md;
-                else if (root.currentMatchday === 0) root.fetchUpcomingMatchday();
-            }, function(err) { root.errorMessage = err; });
+
+                if (result.matchday > 0) root.currentMatchday = result.matchday;
+                if (result.season) root._season = result.season;
+
+                // Enqueue goal fetches for finished + live matches
+                root._enqueueGoalFetches(result.matches, false);
+            } catch (e) {
+                console.warn("[soccerResults] Parse error: " + e);
+                root.errorMessage = "Failed to parse data";
+            }
         }
     }
 
-    function fetchMatches(force) {
-        if (!apiKey) { errorMessage = "Set API key in settings"; return; }
-        if (!activeLeague || matchFetcher.running) return;
-        if (!force && !_canFetch(_lastMatchFetch, _minFetchIntervalMs)) return;
+    // === Fetch: match goals (sequential, one at a time) ===
+    Process {
+        id: goalFetcher
+        property string output: ""
+        stdout: SplitParser { onRead: line => { goalFetcher.output += line + "\n"; } }
+
+        onExited: (exitCode) => {
+            var matchId = root._currentGoalMatchId;
+            root._currentGoalMatchId = "";
+
+            if (exitCode === 0 && goalFetcher.output.trim()) {
+                var data = root._parseResponse(goalFetcher.output);
+                if (data && data.goals && data.goals.length > 0) {
+                    var updated = {};
+                    for (var k in root._matchGoals) updated[k] = root._matchGoals[k];
+                    updated[matchId] = data.goals;
+                    root._matchGoals = updated;
+                }
+            }
+            goalFetcher.output = "";
+
+            // Fetch next in queue
+            root._fetchNextGoal();
+        }
+    }
+
+    function fetchPage(force) {
+        if (!activeLeague || pageFetcher.running) return;
+        if (!force && !_canFetch(_lastPageFetch, _minFetchIntervalMs)) return;
+
+        var url = Api.buildPageUrl(activeLeague);
+        if (!url) return;
 
         loading = true;
-        _lastMatchFetch = _now();
-        matchFetcher.output = "";
-        matchFetcher.command = _buildCurlCommand(Api.buildMatchesUrl(activeLeague));
-        matchFetcher.running = true;
+        standingsLoading = true;
+        _lastPageFetch = _now();
+        pageFetcher.output = "";
+        pageFetcher.command = _buildFetchCommand(url);
+        pageFetcher.running = true;
     }
 
     // === Fetch: matchday matches ===
     Process {
         id: matchdayFetcher
         property string output: ""
-        stdout: SplitParser { onRead: line => { matchdayFetcher.output += line; } }
+        stdout: SplitParser { onRead: line => { matchdayFetcher.output += line + "\n"; } }
 
         onExited: (exitCode) => {
             root.matchdayLoading = false;
-            root._handleFetchResult(matchdayFetcher, exitCode, function(body) {
-                root.matchdayMatches = Api.parseMatchdayResponse(body).matches;
+
+            if (exitCode !== 0 && !matchdayFetcher.output.trim()) {
+                root.matchdayError = "Failed to fetch matchday";
+                matchdayFetcher.output = "";
+                return;
+            }
+
+            var data = root._parseResponse(matchdayFetcher.output);
+            matchdayFetcher.output = "";
+
+            if (data.error) {
+                root.matchdayError = data.error;
+                return;
+            }
+
+            try {
+                var result = Api.parsePageData(JSON.stringify(data));
+                if (result.error) {
+                    root.matchdayError = result.error;
+                    return;
+                }
+
+                root.matchdayMatches = result.matches;
                 root.matchdayError = "";
-            }, function(err) { root.matchdayError = err; });
+            } catch (e) {
+                console.warn("[soccerResults] Matchday parse error: " + e);
+                root.matchdayError = "Failed to parse matchday data";
+            }
         }
     }
 
     function fetchMatchday(force) {
-        if (!apiKey || !activeLeague || currentMatchday <= 0) return;
+        if (!activeLeague || currentMatchday <= 0 || !_season) return;
         if (matchdayFetcher.running) return;
         if (!force && !_canFetch(_lastMatchdayFetch, _matchdayCacheMs)) return;
+
+        var url = Api.buildMatchdayPageUrl(activeLeague, _season, currentMatchday);
+        if (!url) return;
 
         matchdayLoading = true;
         _lastMatchdayFetch = _now();
         matchdayFetcher.output = "";
-        matchdayFetcher.command = _buildCurlCommand(Api.buildMatchdayUrl(activeLeague, currentMatchday));
+        matchdayFetcher.command = _buildFetchCommand(url);
         matchdayFetcher.running = true;
-    }
-
-    // === Fetch: standings ===
-    Process {
-        id: standingsFetcher
-        property string output: ""
-        stdout: SplitParser { onRead: line => { standingsFetcher.output += line; } }
-
-        onExited: (exitCode) => {
-            root.standingsLoading = false;
-            root._handleFetchResult(standingsFetcher, exitCode, function(body) {
-                var result = Api.parseStandings(body);
-                root.standings = result.standings;
-                root.standingsGroups = result.groups;
-                root.standingsError = "";
-            }, function(err) { root.standingsError = err; });
-        }
-    }
-
-    function fetchStandings(force) {
-        if (!apiKey || !activeLeague) return;
-        if (standingsFetcher.running) return;
-        if (!force && !_canFetch(_lastStandingsFetch, _standingsCacheMs)) return;
-
-        standingsLoading = true;
-        _lastStandingsFetch = _now();
-        standingsFetcher.output = "";
-        standingsFetcher.command = _buildCurlCommand(Api.buildStandingsUrl(activeLeague));
-        standingsFetcher.running = true;
-    }
-
-    // === Fetch: upcoming matchday (lightweight, resolves correct matchday number) ===
-    Process {
-        id: upcomingFetcher
-        property string output: ""
-        stdout: SplitParser { onRead: line => { upcomingFetcher.output += line; } }
-
-        onExited: (exitCode) => {
-            root._handleFetchResult(upcomingFetcher, exitCode, function(body) {
-                var md = Api.parseUpcomingMatchday(body);
-                if (md > 0) root.currentMatchday = md;
-            }, function(err) { /* silent — matchday tab will show error if needed */ });
-        }
-    }
-
-    function fetchUpcomingMatchday() {
-        if (!apiKey || !activeLeague || upcomingFetcher.running) return;
-        if (currentMatchday > 0) return; // already resolved
-        upcomingFetcher.output = "";
-        upcomingFetcher.command = _buildCurlCommand(Api.buildUpcomingUrl(activeLeague));
-        upcomingFetcher.running = true;
     }
 
     // === Polling timer ===
@@ -260,62 +305,46 @@ PluginComponent {
             if (root.matches.length > 0) return Math.max(root.refreshIntervalMinutes * 60 * 1000, 180000);
             return 900000; // 15min when no matches today
         }
-        running: root.apiKey !== "" && root.activeLeague !== "" && !root._rateLimited
+        running: root.activeLeague !== ""
         repeat: true
         onTriggered: {
-            // Always refresh today's matches
-            root.fetchMatches();
-            // Only refresh standings/matchday when their tab is active
-            if (root.currentTab === 2) root.fetchStandings();
+            root.fetchPage();
             if (root.currentTab === 1) root.fetchMatchday();
-        }
-    }
-
-    // === Rate limit backoff timer ===
-    Timer {
-        id: rateLimitTimer
-        interval: root._rateLimitBackoffMs
-        repeat: false
-        onTriggered: {
-            root._rateLimited = false;
-            console.log("[soccerResults] Rate limit backoff expired, resuming fetches");
-            root.fetchMatches(true);
+            // Re-queue live matches for goal updates
+            if (root.hasLive) root._enqueueGoalFetches(root.matches, true);
         }
     }
 
     // === Lazy fetch on tab change ===
     onCurrentTabChanged: {
         if (currentTab === 1) {
-            if (currentMatchday === 0) fetchUpcomingMatchday();
-            else if (matchdayMatches.length === 0) fetchMatchday(true);
+            if (currentMatchday > 0 && _season && matchdayMatches.length === 0)
+                fetchMatchday(true);
         }
-        if (currentTab === 2 && standings.length === 0 && standingsGroups.length === 0) {
-            fetchStandings(true);
-        }
+        // Standings are loaded with the main page fetch, no separate fetch needed
     }
 
     // When matchday is resolved, auto-fetch if the matchday tab is active
     onCurrentMatchdayChanged: {
-        if (currentMatchday > 0 && currentTab === 1 && matchdayMatches.length === 0)
+        if (currentMatchday > 0 && _season && currentTab === 1 && matchdayMatches.length === 0)
             fetchMatchday(true);
     }
 
-    // === React to API key changes from settings ===
-    onApiKeyChanged: {
-        if (apiKey && activeLeague) {
-            _resetAllData();
-            fetchMatches(true);
-            fetchStandings(true);
+    // === React to default league setting changes (also handles late pluginData arrival) ===
+    onDefaultLeagueChanged: {
+        if (defaultLeague) {
+            switchLeague(defaultLeague);
         }
     }
 
-    // === Init: set activeLeague from settings default ===
+    // === Init: only fetch if pluginData was already available ===
     Component.onCompleted: {
-        activeLeague = defaultLeague;
-        if (apiKey) {
-            fetchMatches(true);
-            // Standings needed for currentMatchday; matchday deferred until tab opened
-            fetchStandings(true);
+        if (defaultLeague) {
+            activeLeague = defaultLeague;
+            fetchPage(true);
+        } else {
+            // pluginData not loaded yet — onDefaultLeagueChanged will handle it
+            activeLeague = "PL";
         }
     }
 
@@ -323,7 +352,6 @@ PluginComponent {
     ccWidgetIcon: "sports_soccer"
     ccWidgetPrimaryText: Api.leagueName(activeLeague)
     ccWidgetSecondaryText: {
-        if (!apiKey) return "Set API key";
         if (loading && matches.length === 0) return "Loading...";
         if (errorMessage) return errorMessage;
         if (pillMatch) return Api.pillText(pillMatch);
@@ -373,6 +401,26 @@ PluginComponent {
                 visible: source !== ""
                 anchors.verticalCenter: parent.verticalCenter
             }
+
+            Rectangle {
+                visible: root.pillMatch ? Api.pillSuffix(root.pillMatch) !== "" : false
+                width: 1
+                height: root.iconSize - 2
+                radius: 0.5
+                color: root.pillLive ? Theme.primary : Theme.surfaceVariantText
+                opacity: 0.3
+                anchors.verticalCenter: parent.verticalCenter
+            }
+
+            StyledText {
+                visible: root.pillMatch ? Api.pillSuffix(root.pillMatch) !== "" : false
+                text: root.pillMatch ? Api.pillSuffix(root.pillMatch) : ""
+                font.pixelSize: Theme.barTextSize(root.barThickness, root.barConfig?.fontScale) - 1
+                font.weight: Font.Medium
+                color: root.pillLive ? Theme.primary : Theme.surfaceVariantText
+                opacity: 0.7
+                anchors.verticalCenter: parent.verticalCenter
+            }
         }
     }
 
@@ -409,6 +457,16 @@ PluginComponent {
                 visible: source !== ""
                 anchors.horizontalCenter: parent.horizontalCenter
             }
+
+            StyledText {
+                visible: root.pillMatch ? Api.pillSuffix(root.pillMatch) !== "" : false
+                text: root.pillMatch ? Api.pillSuffix(root.pillMatch) : ""
+                font.pixelSize: Theme.barTextSize(root.barThickness, root.barConfig?.fontScale) - 2
+                font.weight: Font.Medium
+                color: root.pillLive ? Theme.primary : Theme.surfaceVariantText
+                opacity: 0.7
+                anchors.horizontalCenter: parent.horizontalCenter
+            }
         }
     }
 
@@ -423,6 +481,7 @@ PluginComponent {
             activeLeague: root.activeLeague
             currentTab: root.currentTab
             pinnedMatchId: root.pinnedMatchId
+            matchGoals: root._matchGoals
 
             loading: root.loading
             matchdayLoading: root.matchdayLoading
@@ -435,14 +494,13 @@ PluginComponent {
             lastUpdated: root.lastUpdated
 
             onRefreshRequested: {
-                root.fetchMatches(true);
-                root.fetchStandings(true);
+                root.fetchPage(true);
                 if (root.currentMatchday > 0) root.fetchMatchday(true);
             }
             onLeagueSelected: function(code) { root.switchLeague(code); }
             onTabChanged: function(tab) { root.currentTab = tab; }
             onMatchPinned: function(matchId) {
-                root.pinnedMatchId = (root.pinnedMatchId === matchId) ? 0 : matchId;
+                root.pinnedMatchId = (root.pinnedMatchId === matchId) ? "" : matchId;
             }
         }
     }

@@ -29,12 +29,13 @@ PopoutComponent {
     required property string standingsError
 
     required property string lastUpdated
-    required property int pinnedMatchId
+    required property string pinnedMatchId
+    required property var matchGoals
 
     signal refreshRequested()
     signal leagueSelected(string code)
     signal tabChanged(int tab)
-    signal matchPinned(int matchId)
+    signal matchPinned(string matchId)
 
     readonly property var leagueOptions: [
         { code: "PL",  label: "PL" },
@@ -45,19 +46,28 @@ PopoutComponent {
         { code: "CL",  label: "CL" }
     ]
 
+    readonly property bool showBundesligaSubs: Api.isBundesliga(popout.activeLeague)
+
+    readonly property var bundesligaSubOptions: [
+        { code: "BL1", label: "1. BL" },
+        { code: "BL2", label: "2. BL" },
+        { code: "BL3", label: "3. Liga" }
+    ]
+
     readonly property var tabOptions: [
         { icon: "today",          label: "Today" },
         { icon: "calendar_month", label: "Matchday" },
         { icon: "leaderboard",    label: "Table" }
     ]
 
+    readonly property var todayMatches: Api.filterToday(popout.matches)
     readonly property bool anyLoading: loading || matchdayLoading || standingsLoading
 
     headerText: Api.leagueName(activeLeague)
     detailsText: {
         if (currentTab === 0) {
             if (loading) return "Updating...";
-            if (matches.length > 0) return matches.length + " match" + (matches.length !== 1 ? "es" : "") + " today";
+            if (todayMatches.length > 0) return todayMatches.length + " match" + (todayMatches.length !== 1 ? "es" : "") + " today";
             return "No matches today";
         }
         if (currentTab === 1) {
@@ -117,7 +127,9 @@ PopoutComponent {
                     required property var modelData
                     required property int index
 
-                    readonly property bool selected: popout.activeLeague === modelData.code
+                    readonly property bool selected: modelData.code === "BL1"
+                        ? Api.isBundesliga(popout.activeLeague)
+                        : popout.activeLeague === modelData.code
 
                     width: (parent.width - Theme.spacingXS * (popout.leagueOptions.length - 1)) / popout.leagueOptions.length
                     height: 28
@@ -138,6 +150,53 @@ PopoutComponent {
 
                     StateLayer {
                         enableRipple: false
+                        onClicked: {
+                            if (modelData.code === "BL1" && Api.isBundesliga(popout.activeLeague))
+                                return; // already on a BL league, subtabs handle switching
+                            popout.leagueSelected(modelData.code)
+                        }
+                    }
+                }
+            }
+        }
+
+        // === Bundesliga subtabs ===
+        Row {
+            id: blSubTabs
+            visible: popout.showBundesligaSubs
+            y: leaguePills.height + Theme.spacingXS
+            width: parent.width
+            height: visible ? 24 : 0
+            spacing: Theme.spacingXS
+
+            Repeater {
+                model: popout.bundesligaSubOptions
+
+                delegate: StyledRect {
+                    required property var modelData
+                    required property int index
+
+                    readonly property bool selected: popout.activeLeague === modelData.code
+
+                    width: (parent.width - Theme.spacingXS * (popout.bundesligaSubOptions.length - 1)) / popout.bundesligaSubOptions.length
+                    height: 24
+                    radius: Theme.cornerRadius - 2
+                    color: selected
+                        ? Qt.rgba(Theme.primary.r, Theme.primary.g, Theme.primary.b, 0.12)
+                        : "transparent"
+
+                    Behavior on color { ColorAnimation { duration: Theme.shortDuration } }
+
+                    StyledText {
+                        anchors.centerIn: parent
+                        text: modelData.label
+                        font.pixelSize: Theme.fontSizeSmall - 1
+                        font.weight: selected ? Font.Bold : Font.Normal
+                        color: selected ? Theme.primary : Theme.surfaceVariantText
+                    }
+
+                    StateLayer {
+                        enableRipple: false
                         onClicked: popout.leagueSelected(modelData.code)
                     }
                 }
@@ -147,7 +206,7 @@ PopoutComponent {
         // === Tab bar ===
         Row {
             id: tabBar
-            y: leaguePills.height + Theme.spacingXS
+            y: leaguePills.height + (blSubTabs.visible ? blSubTabs.height + Theme.spacingXS : 0) + Theme.spacingXS
             width: parent.width
             height: 38
             spacing: Theme.spacingXS
@@ -256,7 +315,7 @@ PopoutComponent {
             spacing: Theme.spacingS
 
             Loader {
-                readonly property bool shouldShow: popout.errorMessage !== "" && popout.matches.length === 0
+                readonly property bool shouldShow: popout.errorMessage !== "" && popout.todayMatches.length === 0
                 Layout.fillWidth: true
                 Layout.preferredHeight: shouldShow ? -1 : 0
                 active: shouldShow
@@ -272,7 +331,7 @@ PopoutComponent {
             }
 
             Loader {
-                readonly property bool shouldShow: popout.errorMessage === "" && !popout.loading && popout.matches.length === 0
+                readonly property bool shouldShow: popout.errorMessage === "" && !popout.loading && popout.todayMatches.length === 0
                 Layout.fillWidth: true
                 Layout.preferredHeight: shouldShow ? -1 : 0
                 active: shouldShow
@@ -286,11 +345,12 @@ PopoutComponent {
             }
 
             Repeater {
-                model: popout.matches
+                model: popout.todayMatches
                 delegate: MatchCard {
                     required property var modelData
                     Layout.fillWidth: true
                     matchData: modelData
+                    goals: matchData ? (popout.matchGoals[matchData.id] || []) : []
                     pinned: matchData ? matchData.id === popout.pinnedMatchId : false
                     onPinClicked: popout.matchPinned(matchData.id)
                 }
@@ -510,6 +570,7 @@ PopoutComponent {
         id: matchDelegate
         MatchCard {
             matchData: null
+            goals: matchData ? (popout.matchGoals[matchData.id] || []) : []
             pinned: matchData ? matchData.id === popout.pinnedMatchId : false
             onPinClicked: { if (matchData) popout.matchPinned(matchData.id); }
         }

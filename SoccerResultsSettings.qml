@@ -17,7 +17,7 @@ PluginSettings {
 
     StyledText {
         width: parent.width
-        text: "Live football scores from football-data.org"
+        text: "Live football scores from kicker.de"
         font.pixelSize: Theme.fontSizeSmall
         color: Theme.surfaceVariantText
         wrapMode: Text.WordWrap
@@ -25,29 +25,21 @@ PluginSettings {
 
     StyledRect {
         width: parent.width
-        height: apiColumn.implicitHeight + Theme.spacingL * 2
+        height: leagueColumn.implicitHeight + Theme.spacingL * 2
         radius: Theme.cornerRadius
         color: Theme.surfaceContainerHigh
 
         Column {
-            id: apiColumn
+            id: leagueColumn
             anchors.fill: parent
             anchors.margins: Theme.spacingL
             spacing: Theme.spacingM
 
             StyledText {
-                text: "API Configuration"
+                text: "League"
                 font.pixelSize: Theme.fontSizeMedium
                 font.weight: Font.Medium
                 color: Theme.surfaceText
-            }
-
-            StringSetting {
-                settingKey: "apiKey"
-                label: "API Key"
-                description: "Your football-data.org API token (free tier)"
-                placeholder: "Enter API key..."
-                defaultValue: ""
             }
 
             SelectionSetting {
@@ -58,6 +50,8 @@ PluginSettings {
                     {label: "Premier League", value: "PL"},
                     {label: "La Liga", value: "PD"},
                     {label: "Bundesliga", value: "BL1"},
+                    {label: "2. Bundesliga", value: "BL2"},
+                    {label: "3. Liga", value: "BL3"},
                     {label: "Serie A", value: "SA"},
                     {label: "Ligue 1", value: "FL1"},
                     {label: "Champions League", value: "CL"}
@@ -128,7 +122,7 @@ PluginSettings {
             }
 
             StyledText {
-                text: "Get a free API key at football-data.org.\nFree tier allows 10 requests per minute.\n\nSupported leagues:\n\u2022 Premier League (PL)\n\u2022 La Liga (PD)\n\u2022 Bundesliga (BL1)\n\u2022 Serie A (SA)\n\u2022 Ligue 1 (FL1)\n\u2022 Champions League (CL)"
+                text: "No API key needed. Data scraped from kicker.de.\n\nSupported leagues:\n\u2022 Premier League (PL)\n\u2022 La Liga (PD)\n\u2022 Bundesliga (BL1)\n\u2022 2. Bundesliga (BL2)\n\u2022 3. Liga (BL3)\n\u2022 Serie A (SA)\n\u2022 Ligue 1 (FL1)\n\u2022 Champions League (CL)"
                 font.pixelSize: Theme.fontSizeSmall
                 color: Theme.surfaceVariantText
                 wrapMode: Text.WordWrap

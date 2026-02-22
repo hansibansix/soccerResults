@@ -1,15 +1,23 @@
 .pragma library
 
-var _baseUrl = "https://api.football-data.org/v4/competitions/";
+var _kickerBase = "https://www.kicker.de/";
 
-var leagueNames = {
-    "PL": "Premier League",
-    "PD": "La Liga",
-    "BL1": "Bundesliga",
-    "SA": "Serie A",
-    "FL1": "Ligue 1",
-    "CL": "Champions League"
+var leagueMap = {
+    "PL":  { slug: "premier-league",   name: "Premier League" },
+    "PD":  { slug: "la-liga",          name: "La Liga" },
+    "BL1": { slug: "bundesliga",       name: "Bundesliga" },
+    "BL2": { slug: "2-bundesliga",     name: "2. Bundesliga" },
+    "BL3": { slug: "3-liga",           name: "3. Liga" },
+    "SA":  { slug: "serie-a",          name: "Serie A" },
+    "FL1": { slug: "ligue-1",          name: "Ligue 1" },
+    "CL":  { slug: "champions-league", name: "Champions League" }
 };
+
+var bundesligaCodes = ["BL1", "BL2", "BL3"];
+
+function isBundesliga(code) {
+    return bundesligaCodes.indexOf(code) >= 0;
+}
 
 var _statusLabels = {
     "SCHEDULED": "Scheduled",
@@ -24,120 +32,41 @@ var _statusLabels = {
 };
 
 function leagueName(code) {
-    return leagueNames[code] || code;
+    var entry = leagueMap[code];
+    return entry ? entry.name : code;
 }
 
-function _pad2(n) { return ("0" + n).slice(-2); }
-
-function todayDateString() {
-    var d = new Date();
-    return d.getFullYear() + "-" + _pad2(d.getMonth() + 1) + "-" + _pad2(d.getDate());
+function buildPageUrl(leagueCode) {
+    var entry = leagueMap[leagueCode];
+    if (!entry) return "";
+    return _kickerBase + entry.slug + "/spieltag";
 }
 
-function buildMatchesUrl(leagueCode) {
-    var today = todayDateString();
-    return _baseUrl + leagueCode + "/matches?dateFrom=" + today + "&dateTo=" + today;
+function buildMatchGoalsUrl(matchId) {
+    if (!matchId) return "";
+    return _kickerBase + matchId + "/schema";
 }
 
-function buildMatchdayUrl(leagueCode, matchday) {
-    return _baseUrl + leagueCode + "/matches?matchday=" + matchday;
+function buildMatchdayPageUrl(leagueCode, season, matchday) {
+    var entry = leagueMap[leagueCode];
+    if (!entry) return "";
+    return _kickerBase + entry.slug + "/spieltag/" + season + "/" + matchday;
 }
 
-function buildUpcomingUrl(leagueCode) {
-    return _baseUrl + leagueCode + "/matches?status=SCHEDULED,TIMED,IN_PLAY,PAUSED&limit=1";
-}
+function parsePageData(jsonString) {
+    var data = JSON.parse(jsonString);
+    if (data.error)
+        return { error: data.error };
 
-function buildStandingsUrl(leagueCode) {
-    return _baseUrl + leagueCode + "/standings";
-}
-
-function parseUpcomingMatchday(jsonString) {
-    var resp = JSON.parse(jsonString);
-    if (resp.matches && resp.matches.length > 0)
-        return resp.matches[0].matchday || 0;
-    return 0;
-}
-
-function parseMatch(m) {
     return {
-        id: m.id,
-        status: m.status,
-        matchday: m.matchday || 0,
-        homeTeam: m.homeTeam.shortName || m.homeTeam.name,
-        awayTeam: m.awayTeam.shortName || m.awayTeam.name,
-        homeCrest: m.homeTeam.crest || "",
-        awayCrest: m.awayTeam.crest || "",
-        homeScore: m.score.fullTime.home,
-        awayScore: m.score.fullTime.away,
-        halfHome: m.score.halfTime.home,
-        halfAway: m.score.halfTime.away,
-        minute: m.minute || null,
-        utcDate: m.utcDate
+        matches: sortMatches(data.matches || []),
+        standings: data.standings || [],
+        matchday: data.matchday || 0,
+        season: data.season || ""
     };
 }
 
-// Extract the most relevant matchday from a list of matches
-function extractMatchday(matches) {
-    if (!matches || matches.length === 0) return 0;
-    return matches[0].matchday || 0;
-}
-
-function _parseMatchList(resp) {
-    if (!resp.matches) return [];
-    var matches = [];
-    for (var i = 0; i < resp.matches.length; i++)
-        matches.push(parseMatch(resp.matches[i]));
-    return sortMatches(matches);
-}
-
-function parseMatches(jsonString) {
-    return _parseMatchList(JSON.parse(jsonString));
-}
-
-function parseMatchdayResponse(jsonString) {
-    return { matches: _parseMatchList(JSON.parse(jsonString)) };
-}
-
-function parseStandings(jsonString) {
-    var resp = JSON.parse(jsonString);
-    var result = { standings: [], currentMatchday: 0, groups: [] };
-
-    if (resp.season)
-        result.currentMatchday = resp.season.currentMatchday || 0;
-
-    if (!resp.standings) return result;
-
-    for (var i = 0; i < resp.standings.length; i++) {
-        var s = resp.standings[i];
-        if (s.type !== "TOTAL") continue;
-
-        var rows = [];
-        for (var j = 0; j < s.table.length; j++) {
-            var t = s.table[j];
-            rows.push({
-                position: t.position,
-                team: t.team.shortName || t.team.name,
-                tla: t.team.tla || "",
-                played: t.playedGames,
-                won: t.won,
-                drawn: t.draw,
-                lost: t.lost,
-                gf: t.goalsFor,
-                ga: t.goalsAgainst,
-                gd: t.goalDifference,
-                points: t.points,
-                form: t.form || ""
-            });
-        }
-
-        if (s.group)
-            result.groups.push({ label: s.group, rows: rows });
-        else
-            result.standings = rows;
-    }
-
-    return result;
-}
+function _pad2(n) { return ("0" + n).slice(-2); }
 
 function sortMatches(matches) {
     var live = [], upcoming = [], finished = [], other = [];
@@ -167,16 +96,19 @@ function matchStatusLabel(status) {
     return _statusLabels[status] || status || "Unknown";
 }
 
-function estimateMinute(match) {
-    if (!match || !match.utcDate) return "";
-    if (match.status === "PAUSED") return "HT";
-    if (match.status !== "IN_PLAY") return "";
-    var elapsed = Math.floor((Date.now() - new Date(match.utcDate).getTime()) / 60000);
-    if (elapsed < 0) return "";
-    if (elapsed <= 45) return elapsed + "'";
-    if (elapsed <= 60) return "HT";
-    var secondHalf = elapsed - 15;
-    return (secondHalf > 90 ? "90+" : secondHalf) + "'";
+function filterToday(matches) {
+    if (!matches || matches.length === 0) return [];
+    var now = new Date();
+    var todayStr = now.getFullYear() + "-" + _pad2(now.getMonth() + 1) + "-" + _pad2(now.getDate());
+    var result = [];
+    for (var i = 0; i < matches.length; i++) {
+        var m = matches[i];
+        if (!m.utcDate) continue;
+        var matchDate = new Date(m.utcDate);
+        var localStr = matchDate.getFullYear() + "-" + _pad2(matchDate.getMonth() + 1) + "-" + _pad2(matchDate.getDate());
+        if (localStr === todayStr) result.push(m);
+    }
+    return result;
 }
 
 function formatKickoff(utcDateString) {
@@ -202,7 +134,22 @@ function scoreText(match) {
 
 function pillText(match) {
     if (!match) return "";
-    return abbreviate(match.homeTeam) + " " + scoreText(match) + " " + abbreviate(match.awayTeam);
+    var text = abbreviate(match.homeTeam) + " " + scoreText(match) + " " + abbreviate(match.awayTeam);
+    if (match.status === "PAUSED")
+        text += " HT";
+    else if (isLive(match.status) && match.minute)
+        text += " " + match.minute + "'";
+    else if (isFinished(match.status))
+        text += " FT";
+    return text;
+}
+
+function pillSuffix(match) {
+    if (!match) return "";
+    if (match.status === "PAUSED") return "HT";
+    if (isLive(match.status) && match.minute) return match.minute + "'";
+    if (isFinished(match.status)) return "FT";
+    return "";
 }
 
 function abbreviate(name) {
@@ -238,17 +185,19 @@ function groupByDate(matches) {
     return result;
 }
 
-function findPillMatch(matches, pinnedId) {
-    if (!matches || matches.length === 0) return null;
+function findPillMatch(matches, matchdayMatches, pinnedId) {
+    var all = (matches || []).concat(matchdayMatches || []);
+    if (all.length === 0) return null;
     if (pinnedId) {
-        for (var i = 0; i < matches.length; i++)
-            if (matches[i].id === pinnedId) return matches[i];
+        for (var i = 0; i < all.length; i++)
+            if (all[i].id === pinnedId) return all[i];
     }
-    // Priority: live > upcoming > finished > first
+    // Priority from main matches: live > upcoming > finished > first
+    var primary = matches && matches.length > 0 ? matches : all;
     var checks = [isLive, isUpcoming, isFinished];
     for (var c = 0; c < checks.length; c++) {
-        for (var j = 0; j < matches.length; j++)
-            if (checks[c](matches[j].status)) return matches[j];
+        for (var j = 0; j < primary.length; j++)
+            if (checks[c](primary[j].status)) return primary[j];
     }
-    return matches[0];
+    return primary[0];
 }
