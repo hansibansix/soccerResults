@@ -232,7 +232,7 @@ PluginComponent {
         pinnedMatchId = matchId;
         _pinnedLeague = leagueCode || activeLeague;
         // Find the match data in current lists
-        var allMatches = (matches || []).concat(matchdayMatches || []);
+        var allMatches = (matches || []).concat(matchdayMatches || []).concat(liveMatches || []);
         for (var i = 0; i < allMatches.length; i++) {
             if (allMatches[i].id === matchId) {
                 _pinnedMatchData = allMatches[i];
