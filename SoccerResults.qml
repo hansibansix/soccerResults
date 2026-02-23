@@ -730,16 +730,19 @@ PluginComponent {
     ccWidgetIsActive: matches.length > 0
 
     // === Bar pills ===
+    readonly property int pillCrestSize: Math.round(root.iconSize * 1.3)
+    readonly property int pillScoreSize: Math.round(Theme.barTextSize(root.barThickness, root.barConfig?.fontScale) * 1.2)
+
     horizontalBarPill: Component {
         Row {
-            spacing: Theme.spacingXS
+            spacing: Theme.spacingS
 
             Image {
                 source: root.pillMatch ? root.pillMatch.homeCrest || "" : ""
-                sourceSize.width: root.iconSize
-                sourceSize.height: root.iconSize
-                width: root.iconSize
-                height: root.iconSize
+                sourceSize.width: root.pillCrestSize
+                sourceSize.height: root.pillCrestSize
+                width: root.pillCrestSize
+                height: root.pillCrestSize
                 fillMode: Image.PreserveAspectFit
                 visible: root.pillMatch && source !== ""
                 anchors.verticalCenter: parent.verticalCenter
@@ -747,7 +750,7 @@ PluginComponent {
 
             DankIcon {
                 name: "sports_soccer"
-                size: root.iconSize
+                size: root.pillCrestSize
                 color: root.pillLive ? Theme.primary : Theme.surfaceVariantText
                 anchors.verticalCenter: parent.verticalCenter
                 visible: !root.pillMatch || !root.pillMatch.homeCrest
@@ -756,18 +759,18 @@ PluginComponent {
             StyledText {
                 visible: root.pillMatch !== null
                 text: root.pillMatch ? Api.scoreText(root.pillMatch) : ""
-                font.pixelSize: Theme.barTextSize(root.barThickness, root.barConfig?.fontScale)
-                font.weight: root.pillLive ? Font.Bold : Font.Normal
+                font.pixelSize: root.pillScoreSize
+                font.weight: Font.Bold
                 color: root.pillLive ? Theme.primary : Theme.surfaceVariantText
                 anchors.verticalCenter: parent.verticalCenter
             }
 
             Image {
                 source: root.pillMatch ? root.pillMatch.awayCrest || "" : ""
-                sourceSize.width: root.iconSize
-                sourceSize.height: root.iconSize
-                width: root.iconSize
-                height: root.iconSize
+                sourceSize.width: root.pillCrestSize
+                sourceSize.height: root.pillCrestSize
+                width: root.pillCrestSize
+                height: root.pillCrestSize
                 fillMode: Image.PreserveAspectFit
                 visible: root.pillMatch && source !== ""
                 anchors.verticalCenter: parent.verticalCenter
@@ -776,7 +779,7 @@ PluginComponent {
             Rectangle {
                 visible: root.pillMatch ? Api.pillSuffix(root.pillMatch) !== "" : false
                 width: 1
-                height: root.iconSize - 2
+                height: root.pillCrestSize - 2
                 radius: 0.5
                 color: root.pillLive ? Theme.primary : Theme.surfaceVariantText
                 opacity: 0.3
@@ -786,7 +789,7 @@ PluginComponent {
             StyledText {
                 visible: root.pillMatch ? Api.pillSuffix(root.pillMatch) !== "" : false
                 text: root.pillMatch ? Api.pillSuffix(root.pillMatch) : ""
-                font.pixelSize: Theme.barTextSize(root.barThickness, root.barConfig?.fontScale) - 1
+                font.pixelSize: root.pillScoreSize - 1
                 font.weight: Font.Medium
                 color: root.pillLive ? Theme.primary : Theme.surfaceVariantText
                 opacity: 0.7
@@ -797,7 +800,7 @@ PluginComponent {
 
     verticalBarPill: Component {
         Column {
-            spacing: 2
+            spacing: Theme.spacingXS
 
             DankIcon {
                 name: "sports_soccer"
@@ -809,10 +812,10 @@ PluginComponent {
 
             Image {
                 source: root.pillMatch ? root.pillMatch.homeCrest || "" : ""
-                sourceSize.width: root.iconSize
-                sourceSize.height: root.iconSize
-                width: root.iconSize
-                height: root.iconSize
+                sourceSize.width: root.pillCrestSize
+                sourceSize.height: root.pillCrestSize
+                width: root.pillCrestSize
+                height: root.pillCrestSize
                 fillMode: Image.PreserveAspectFit
                 visible: root.pillMatch && source !== ""
                 anchors.horizontalCenter: parent.horizontalCenter
@@ -821,18 +824,18 @@ PluginComponent {
             StyledText {
                 visible: root.pillMatch !== null
                 text: root.pillMatch ? Api.scoreText(root.pillMatch) : ""
-                font.pixelSize: Theme.barTextSize(root.barThickness, root.barConfig?.fontScale)
-                font.weight: root.pillLive ? Font.Bold : Font.Normal
+                font.pixelSize: root.pillScoreSize
+                font.weight: Font.Bold
                 color: root.pillLive ? Theme.primary : Theme.surfaceVariantText
                 anchors.horizontalCenter: parent.horizontalCenter
             }
 
             Image {
                 source: root.pillMatch ? root.pillMatch.awayCrest || "" : ""
-                sourceSize.width: root.iconSize
-                sourceSize.height: root.iconSize
-                width: root.iconSize
-                height: root.iconSize
+                sourceSize.width: root.pillCrestSize
+                sourceSize.height: root.pillCrestSize
+                width: root.pillCrestSize
+                height: root.pillCrestSize
                 fillMode: Image.PreserveAspectFit
                 visible: root.pillMatch && source !== ""
                 anchors.horizontalCenter: parent.horizontalCenter
@@ -841,7 +844,7 @@ PluginComponent {
             StyledText {
                 visible: root.pillMatch ? Api.pillSuffix(root.pillMatch) !== "" : false
                 text: root.pillMatch ? Api.pillSuffix(root.pillMatch) : ""
-                font.pixelSize: Theme.barTextSize(root.barThickness, root.barConfig?.fontScale) - 2
+                font.pixelSize: root.pillScoreSize - 2
                 font.weight: Font.Medium
                 color: root.pillLive ? Theme.primary : Theme.surfaceVariantText
                 opacity: 0.7
