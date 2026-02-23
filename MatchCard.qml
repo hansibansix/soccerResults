@@ -99,11 +99,11 @@ StyledRect {
         filled: pinned
         size: 13
         color: pinned ? Theme.primary : Theme.surfaceVariantText
+        visible: !finished || pinned
         opacity: {
             if (pinned) return 1.0;
             if (pinArea.containsMouse) return 0.7;
-            if (live || finished) return 0.25;
-            return 0;
+            return 0.25;
         }
 
         Behavior on opacity { NumberAnimation { duration: 150 } }

@@ -246,6 +246,12 @@ PluginComponent {
         for (var i = 0; i < matchList.length; i++) {
             if (matchList[i].id === pinnedMatchId) {
                 _pinnedMatchData = matchList[i];
+                // Auto-unpin when match is no longer live
+                if (Api.isFinished(matchList[i].status)) {
+                    pinnedMatchId = "";
+                    _pinnedLeague = "";
+                    _pinnedMatchData = null;
+                }
                 return;
             }
         }
@@ -266,8 +272,9 @@ PluginComponent {
         if (!favoriteTeam) return;
         var found = Api.findFavoriteTeamMatch(matchList, favoriteTeam);
         if (!found) return;
-        // Don't overwrite a live match with a non-live one
-        if (_favoriteMatchData && Api.isLive(_favoriteMatchData.status) && !Api.isLive(found.status)) return;
+        // Don't overwrite a live match with an upcoming one from another league scan
+        if (_favoriteMatchData && Api.isLive(_favoriteMatchData.status) &&
+            !Api.isLive(found.status) && !Api.isFinished(found.status)) return;
         _favoriteMatchData = found;
         if (leagueCode) _favoriteLeagueCache = leagueCode;
     }
