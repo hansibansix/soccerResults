@@ -61,21 +61,21 @@ Timer/user action
 
 - Python 3.7+
 - [primp](https://pypi.org/project/primp/) — TLS-impersonating HTTP client
-- [pycookiecheat](https://pypi.org/project/pycookiecheat/) — Chromium cookie decryption (optional, for Chromium-based browsers)
+- [pycookiecheat](https://pypi.org/project/pycookiecheat/) — browser cookie decryption
 - A supported browser with a kicker.de session (for DataDome cookie)
 
 ### Supported Browsers
 
 | Browser | Cookie Method |
 |---------|--------------|
-| Zen Browser | Direct SQLite read |
-| Firefox | Direct SQLite read |
-| LibreWolf | Direct SQLite read |
-| Waterfox | Direct SQLite read |
-| Floorp | Direct SQLite read |
-| Chromium | pycookiecheat (encrypted) |
-| Google Chrome | pycookiecheat (encrypted) |
-| Brave | pycookiecheat (encrypted) |
-| Vivaldi | pycookiecheat (encrypted) |
+| Zen Browser | SQLite |
+| Firefox | SQLite + pycookiecheat |
+| LibreWolf | SQLite |
+| Waterfox | SQLite |
+| Floorp | SQLite |
+| Chromium | pycookiecheat |
+| Google Chrome | pycookiecheat |
+| Brave | pycookiecheat |
+| Vivaldi | pycookiecheat |
 
-Mozilla-based browsers store cookies in plain SQLite and are read directly. Chromium-based browsers encrypt their cookie store; `pycookiecheat` handles decryption via the system keyring.
+Mozilla-based browsers store cookies in plain SQLite and are read directly. Chromium-based browsers encrypt their cookie store; `pycookiecheat` handles decryption via the system keyring. Firefox supports both methods.
