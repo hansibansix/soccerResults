@@ -63,6 +63,31 @@ StyledRect {
         }
     }
 
+    // Open in browser button
+    DankIcon {
+        id: linkIcon
+        anchors.top: parent.top
+        anchors.right: pinIcon.left
+        anchors.topMargin: 6
+        anchors.rightMargin: 2
+        name: "open_in_new"
+        size: 13
+        color: Theme.surfaceVariantText
+        visible: matchData && matchData.id
+        opacity: linkArea.containsMouse ? 0.7 : 0.25
+
+        Behavior on opacity { NumberAnimation { duration: 150 } }
+
+        MouseArea {
+            id: linkArea
+            anchors.fill: parent
+            anchors.margins: -8
+            hoverEnabled: true
+            cursorShape: Qt.PointingHandCursor
+            onClicked: Qt.openUrlExternally(Api.buildMatchUrl(card.matchData.id))
+        }
+    }
+
     // Pin button
     DankIcon {
         id: pinIcon

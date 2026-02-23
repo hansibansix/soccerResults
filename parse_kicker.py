@@ -364,6 +364,20 @@ def safe_int(s):
         return 0
 
 
+def _is_error_page(html):
+    """Check if the HTML is a 403/404/Access Denied error page."""
+    return "<title>403" in html or "<title>404" in html or "Access Denied" in html
+
+
+def _read_and_validate(min_length, fallback_result):
+    """Read stdin and validate; returns HTML or None (writing fallback on failure)."""
+    html = sys.stdin.read()
+    if not html or len(html) < min_length or _is_error_page(html):
+        json.dump(fallback_result, sys.stdout)
+        return None
+    return html
+
+
 def extract_goals(html):
     """Extract goal events from a match /schema page."""
     goals = []
@@ -438,16 +452,9 @@ def extract_goals(html):
 
 def main_goals():
     """Parse a match /schema page for goal events."""
-    html = sys.stdin.read()
-
-    if not html or len(html) < 200:
-        json.dump({"goals": []}, sys.stdout)
+    html = _read_and_validate(200, {"goals": []})
+    if not html:
         return
-
-    if "<title>403" in html or "<title>404" in html or "Access Denied" in html:
-        json.dump({"goals": []}, sys.stdout)
-        return
-
     try:
         goals = extract_goals(html)
         json.dump({"goals": goals}, sys.stdout, ensure_ascii=False)
@@ -456,17 +463,9 @@ def main_goals():
 
 
 def main():
-    html = sys.stdin.read()
-
-    if not html or len(html) < 500:
-        json.dump({"error": "Empty or invalid response from kicker.de"}, sys.stdout)
+    html = _read_and_validate(500, {"error": "Empty or invalid response from kicker.de"})
+    if not html:
         return
-
-    # Check for common error indicators
-    if "<title>403" in html or "<title>404" in html or "Access Denied" in html:
-        json.dump({"error": "kicker.de returned an error page"}, sys.stdout)
-        return
-
     try:
         matchday, season = extract_qmconfig(html)
         json_ld_events = extract_json_ld_events(html)
@@ -488,16 +487,9 @@ def main():
 
 def main_standings():
     """Parse a /tabelle page for standings only."""
-    html = sys.stdin.read()
-
-    if not html or len(html) < 500:
-        json.dump({"standings": []}, sys.stdout)
+    html = _read_and_validate(500, {"standings": []})
+    if not html:
         return
-
-    if "<title>403" in html or "<title>404" in html or "Access Denied" in html:
-        json.dump({"standings": []}, sys.stdout)
-        return
-
     try:
         standings = extract_standings(html)
         json.dump({"standings": standings}, sys.stdout, ensure_ascii=False)

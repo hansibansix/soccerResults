@@ -42,6 +42,11 @@ function buildPageUrl(leagueCode) {
     return _kickerBase + entry.slug + "/spieltag";
 }
 
+function buildMatchUrl(matchId) {
+    if (!matchId) return "";
+    return _kickerBase + matchId + "/ticker";
+}
+
 function buildMatchGoalsUrl(matchId) {
     if (!matchId) return "";
     return _kickerBase + matchId + "/schema";
@@ -181,10 +186,7 @@ function groupByDate(matches) {
             result.push({ type: "header", dateLabel: dateStr });
             lastDate = dateStr;
         }
-        var item = {};
-        for (var k in m) item[k] = m[k];
-        item.type = "match";
-        result.push(item);
+        result.push(Object.assign({}, m, { type: "match" }));
     }
     return result;
 }

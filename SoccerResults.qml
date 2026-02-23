@@ -100,14 +100,18 @@ PluginComponent {
         return (_now() - lastFetch) >= Math.max(cacheMs, _minFetchIntervalMs);
     }
 
-    function _resetAllData() {
-        _resetLeagueData();
+    function _resetFavoriteState() {
         _favoriteMatchData = null;
         _favoriteLeagueQueue = [];
         _favoriteLeagueQueueIdx = 0;
         _favoriteLeagueCache = "";
         _currentFavFetchLeague = "";
         _lastFavoriteScan = 0;
+    }
+
+    function _resetAllData() {
+        _resetLeagueData();
+        _resetFavoriteState();
     }
 
     function _resetLeagueData() {
@@ -155,7 +159,7 @@ PluginComponent {
         _currentGoalMatchId = matchId;
         var url = Api.buildMatchGoalsUrl(matchId);
         goalFetcher.output = "";
-        goalFetcher.command = _buildGoalsFetchCommand(url);
+        goalFetcher.command = _buildFetchCommand(url, "--goals");
         goalFetcher.running = true;
     }
 
@@ -165,16 +169,9 @@ PluginComponent {
 
     readonly property string _browserArg: cookieBrowser ? " --browser '" + cookieBrowser + "'" : ""
 
-    function _buildFetchCommand(url) {
-        return ["bash", "-c", "python3 '" + _fetchScriptPath + "' '" + url + "'" + _browserArg + " | python3 '" + _scriptPath + "'"];
-    }
-
-    function _buildGoalsFetchCommand(url) {
-        return ["bash", "-c", "python3 '" + _fetchScriptPath + "' '" + url + "'" + _browserArg + " | python3 '" + _scriptPath + "' --goals"];
-    }
-
-    function _buildStandingsFetchCommand(url) {
-        return ["bash", "-c", "python3 '" + _fetchScriptPath + "' '" + url + "'" + _browserArg + " | python3 '" + _scriptPath + "' --standings"];
+    function _buildFetchCommand(url, parserFlag) {
+        var flagStr = parserFlag ? " " + parserFlag : "";
+        return ["bash", "-c", "python3 '" + _fetchScriptPath + "' '" + url + "'" + _browserArg + " | python3 '" + _scriptPath + "'" + flagStr];
     }
 
     function _parseResponse(output) {
@@ -184,6 +181,18 @@ PluginComponent {
             return JSON.parse(output);
         } catch (e) {
             return { error: "Failed to parse response" };
+        }
+    }
+
+    function _parsePageResult(fetcherOutput, exitCode) {
+        if (exitCode !== 0 && !fetcherOutput.trim()) return null;
+        var data = _parseResponse(fetcherOutput);
+        if (data.error) return null;
+        try {
+            var result = Api.parsePageData(data);
+            return result.error ? null : result;
+        } catch (e) {
+            return null;
         }
     }
 
@@ -404,8 +413,7 @@ PluginComponent {
             if (exitCode === 0 && goalFetcher.output.trim()) {
                 var data = root._parseResponse(goalFetcher.output);
                 if (data && data.goals && data.goals.length > 0) {
-                    var updated = {};
-                    for (var k in root._matchGoals) updated[k] = root._matchGoals[k];
+                    var updated = Object.assign({}, root._matchGoals);
                     updated[matchId] = data.goals;
                     root._matchGoals = updated;
                 }
@@ -424,20 +432,9 @@ PluginComponent {
         stdout: SplitParser { onRead: line => { pinnedFetcher.output += line + "\n"; } }
 
         onExited: (exitCode) => {
-            if (exitCode === 0 && pinnedFetcher.output.trim()) {
-                var data = root._parseResponse(pinnedFetcher.output);
-                if (!data.error) {
-                    try {
-                        var result = Api.parsePageData(data);
-                        if (!result.error) {
-                            root._updatePinnedFromMatches(result.matches);
-                        }
-                    } catch (e) {
-                        console.warn("[soccerResults] Pinned match parse error: " + e);
-                    }
-                }
-            }
+            var result = root._parsePageResult(pinnedFetcher.output, exitCode);
             pinnedFetcher.output = "";
+            if (result) root._updatePinnedFromMatches(result.matches);
         }
     }
 
@@ -451,21 +448,9 @@ PluginComponent {
             var league = root._currentFavFetchLeague;
             root._currentFavFetchLeague = "";
 
-            if (exitCode === 0 && favoriteFetcher.output.trim()) {
-                var data = root._parseResponse(favoriteFetcher.output);
-                if (!data.error) {
-                    try {
-                        var result = Api.parsePageData(data);
-                        if (!result.error) {
-                            root._updateFavoriteFromMatches(result.matches, league);
-                        }
-                    } catch (e) {
-                        console.warn("[soccerResults] Favorite match parse error: " + e);
-                    }
-                }
-            }
+            var result = root._parsePageResult(favoriteFetcher.output, exitCode);
             favoriteFetcher.output = "";
-            // Continue scanning remaining leagues
+            if (result) root._updateFavoriteFromMatches(result.matches, league);
             root._fetchNextFavoriteLeague();
         }
     }
@@ -483,28 +468,19 @@ PluginComponent {
             var code = (idx >= 0 && idx < root._liveLeagueQueue.length)
                 ? root._liveLeagueQueue[idx] : "";
 
-            if (exitCode === 0 && liveFetcher.output.trim()) {
-                var data = root._parseResponse(liveFetcher.output);
-                if (!data.error) {
-                    try {
-                        var result = Api.parsePageData(data);
-                        if (!result.error) {
-                            var live = Api.filterLive(result.matches);
-                            if (live.length > 0) {
-                                var name = Api.leagueName(code);
-                                for (var i = 0; i < live.length; i++) {
-                                    live[i]._leagueCode = code;
-                                    live[i]._leagueName = name;
-                                }
-                                root._liveAccumulator = root._liveAccumulator.concat(live);
-                            }
-                        }
-                    } catch (e) {
-                        console.warn("[soccerResults] Live scan parse error: " + e);
+            var result = root._parsePageResult(liveFetcher.output, exitCode);
+            liveFetcher.output = "";
+            if (result) {
+                var live = Api.filterLive(result.matches);
+                if (live.length > 0) {
+                    var name = Api.leagueName(code);
+                    for (var i = 0; i < live.length; i++) {
+                        live[i]._leagueCode = code;
+                        live[i]._leagueName = name;
                     }
+                    root._liveAccumulator = root._liveAccumulator.concat(live);
                 }
             }
-            liveFetcher.output = "";
             root._fetchNextLiveLeague();
         }
     }
@@ -640,7 +616,7 @@ PluginComponent {
         standingsLoading = true;
         _lastStandingsFetch = _now();
         standingsFetcher.output = "";
-        standingsFetcher.command = _buildStandingsFetchCommand(url);
+        standingsFetcher.command = _buildFetchCommand(url, "--standings");
         standingsFetcher.running = true;
     }
 
@@ -719,11 +695,7 @@ PluginComponent {
 
     // === React to favorite team setting changes ===
     onFavoriteTeamChanged: {
-        _favoriteMatchData = null;
-        _favoriteLeagueQueue = [];
-        _favoriteLeagueQueueIdx = 0;
-        _favoriteLeagueCache = "";
-        _lastFavoriteScan = 0;
+        _resetFavoriteState();
         if (favoriteTeam) _fetchFavoriteMatch();
     }
 
