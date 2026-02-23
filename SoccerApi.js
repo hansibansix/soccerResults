@@ -71,7 +71,8 @@ function parsePageData(data) {
     return {
         matches: sortMatches(data.matches || []),
         matchday: data.matchday || 0,
-        season: data.season || ""
+        season: data.season || "",
+        standings: data.standings || []
     };
 }
 

@@ -375,13 +375,30 @@ PluginComponent {
                 root.errorMessage = "";
                 root._updateTimestamp();
 
+                // Use standings from /spieltag if we don't have any yet
+                if (result.standings && result.standings.length > 0 && root.standings.length === 0) {
+                    root.standings = result.standings;
+                    root.standingsError = "";
+                }
+
+                // Set season before matchday so onCurrentMatchdayChanged sees _season
+                if (result.season) root._season = result.season;
                 if (result.matchday > 0) {
                     root._defaultMatchday = result.matchday;
                     // Only update currentMatchday if user hasn't navigated away
                     if (root.currentMatchday === 0 || root.currentMatchday === root._defaultMatchday)
                         root.currentMatchday = result.matchday;
                 }
-                if (result.season) root._season = result.season;
+
+                // Reuse page matches for Matchday tab when on the default matchday
+                if (root.currentTab === 1 && root.matchdayMatches.length === 0 &&
+                    root.currentMatchday > 0 && root.currentMatchday === root._defaultMatchday) {
+                    root.matchdayMatches = result.matches;
+                    root.matchdayError = "";
+                } else if (root.currentTab === 1 && root.matchdayMatches.length === 0 &&
+                    root.currentMatchday > 0 && root._season) {
+                    Qt.callLater(root.fetchMatchday, true);
+                }
 
                 // Enqueue goal fetches for finished + live matches
                 root._enqueueGoalFetches(result.matches, false);
@@ -492,10 +509,25 @@ PluginComponent {
         _lastLiveScan = _now();
         liveLoading = true;
         liveError = "";
-        _liveAccumulator = [];
 
+        // Seed accumulator with active league's live matches (already fetched by pageFetcher)
+        var activeLive = Api.filterLive(matches);
+        if (activeLive.length > 0) {
+            var name = Api.leagueName(activeLeague);
+            for (var i = 0; i < activeLive.length; i++) {
+                activeLive[i]._leagueCode = activeLeague;
+                activeLive[i]._leagueName = name;
+            }
+        }
+        _liveAccumulator = activeLive;
+
+        // Only scan other leagues (skip active league)
         var codes = Object.keys(Api.leagueMap);
-        _liveLeagueQueue = codes;
+        var queue = [];
+        for (var i = 0; i < codes.length; i++) {
+            if (codes[i] !== activeLeague) queue.push(codes[i]);
+        }
+        _liveLeagueQueue = queue;
         _liveLeagueQueueIdx = 0;
         _fetchNextLiveLeague();
     }
@@ -679,8 +711,15 @@ PluginComponent {
 
     onCurrentTabChanged: {
         if (currentTab === 1) {
-            if (currentMatchday > 0 && _season && matchdayMatches.length === 0)
-                fetchMatchday(true);
+            if (matchdayMatches.length === 0 && currentMatchday > 0) {
+                // Reuse page matches if on default matchday, otherwise fetch
+                if (currentMatchday === _defaultMatchday && matches.length > 0) {
+                    matchdayMatches = matches;
+                    matchdayError = "";
+                } else if (_season) {
+                    fetchMatchday(true);
+                }
+            }
         } else if (currentTab === 2) {
             if (standings.length === 0 || _canFetch(_lastStandingsFetch, _standingsCacheMs))
                 fetchStandings(true);
@@ -689,8 +728,14 @@ PluginComponent {
 
     // When matchday is resolved, auto-fetch if the matchday tab is active
     onCurrentMatchdayChanged: {
-        if (currentMatchday > 0 && _season && currentTab === 1 && matchdayMatches.length === 0)
-            fetchMatchday(true);
+        if (currentMatchday > 0 && currentTab === 1 && matchdayMatches.length === 0) {
+            if (currentMatchday === _defaultMatchday && matches.length > 0) {
+                matchdayMatches = matches;
+                matchdayError = "";
+            } else if (_season) {
+                fetchMatchday(true);
+            }
+        }
     }
 
     // === React to favorite team setting changes ===
