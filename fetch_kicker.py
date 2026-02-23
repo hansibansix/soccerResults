@@ -2,7 +2,9 @@
 """Fetch kicker.de pages, handling DataDome bot protection.
 
 Uses primp (TLS-impersonating HTTP client) with a DataDome cookie read from
-a browser's cookie store. The cookie is set automatically when you visit
+a browser's cookie store. Mozilla-based browsers are read directly from
+their SQLite cookie DB. Chromium-based browsers use pycookiecheat to decrypt
+the encrypted cookie store. The cookie is set automatically when you visit
 kicker.de in the browser and lasts ~1 year.
 
 Usage:
@@ -12,129 +14,49 @@ Usage:
 Outputs raw HTML to stdout. Exits non-zero on failure.
 """
 
-import json
-import sys
-import os
 import glob
+import json
+import os
 import shutil
 import sqlite3
 import subprocess
+import sys
 import tempfile
 import time
 
-# Browser definitions: binary name, display name, cookie glob patterns
-BROWSERS = [
-    {
-        "bin": "zen-browser",
-        "name": "Zen Browser",
-        "cookie_globs": [os.path.expanduser("~/.zen/*/cookies.sqlite")],
-    },
-    {
-        "bin": "firefox",
-        "name": "Firefox",
-        "cookie_globs": [os.path.expanduser("~/.mozilla/firefox/*/cookies.sqlite")],
-    },
-    {
-        "bin": "librewolf",
-        "name": "LibreWolf",
-        "cookie_globs": [os.path.expanduser("~/.librewolf/*/cookies.sqlite")],
-    },
-    {
-        "bin": "waterfox",
-        "name": "Waterfox",
-        "cookie_globs": [os.path.expanduser("~/.waterfox/*/cookies.sqlite")],
-    },
-    {
-        "bin": "floorp",
-        "name": "Floorp",
-        "cookie_globs": [os.path.expanduser("~/.floorp/*/cookies.sqlite")],
-    },
-    # Chromium-based browsers encrypt cookies, so they are only used for
-    # opening tabs to refresh the cookie. Cookie reading falls back to the
-    # first available Mozilla-based browser above.
-    {
-        "bin": "chromium",
-        "name": "Chromium",
-        "cookie_globs": [],
-    },
-    {
-        "bin": "google-chrome-stable",
-        "name": "Google Chrome",
-        "cookie_globs": [],
-    },
-    {
-        "bin": "brave-browser",
-        "name": "Brave",
-        "cookie_globs": [],
-    },
-    {
-        "bin": "brave-browser-beta",
-        "name": "Brave Beta",
-        "cookie_globs": [],
-    },
-    {
-        "bin": "brave-browser-nightly",
-        "name": "Brave Nightly",
-        "cookie_globs": [],
-    },
-    {
-        "bin": "vivaldi-stable",
-        "name": "Vivaldi",
-        "cookie_globs": [],
-    },
+_HOME = os.path.expanduser("~")
+
+# (binary, display name, cookie glob or None for Chromium-based, pycookiecheat BrowserType name or None)
+_BROWSER_DEFS = [
+    ("zen-browser",          "Zen Browser",   f"{_HOME}/.zen/*/cookies.sqlite",           None),
+    ("firefox",              "Firefox",        f"{_HOME}/.mozilla/firefox/*/cookies.sqlite", "FIREFOX"),
+    ("librewolf",            "LibreWolf",      f"{_HOME}/.librewolf/*/cookies.sqlite",     None),
+    ("waterfox",             "Waterfox",       f"{_HOME}/.waterfox/*/cookies.sqlite",      None),
+    ("floorp",               "Floorp",         f"{_HOME}/.floorp/*/cookies.sqlite",        None),
+    ("chromium",             "Chromium",       None,                                        "CHROMIUM"),
+    ("google-chrome-stable", "Google Chrome",  None,                                        "CHROME"),
+    ("brave-browser",        "Brave",          None,                                        "BRAVE"),
+    ("brave-browser-beta",   "Brave Beta",     None,                                        "BRAVE"),
+    ("brave-browser-nightly","Brave Nightly",  None,                                        "BRAVE"),
+    ("vivaldi-stable",       "Vivaldi",        None,                                        "CHROMIUM"),
 ]
 
-KICKER_URL = "https://www.kicker.de/bundesliga/spieltag"
-COOKIE_REFRESH_WAIT = 15
-COOKIE_POLL_INTERVAL = 1
+_BROWSERS = {b[0]: {"bin": b[0], "name": b[1], "cookie_glob": b[2], "pcc_type": b[3]} for b in _BROWSER_DEFS}
+_KICKER_URL = "https://www.kicker.de/bundesliga/spieltag"
+_COOKIE_REFRESH_WAIT = 15
 
 
 def detect_installed_browsers():
-    """Return list of installed browsers with their binary and display name."""
-    installed = []
-    for browser in BROWSERS:
-        if shutil.which(browser["bin"]):
-            installed.append({"bin": browser["bin"], "name": browser["name"]})
-    return installed
-
-
-def get_browser(name):
-    """Look up a browser by binary name."""
-    for browser in BROWSERS:
-        if browser["bin"] == name:
-            return browser
-    return None
-
-
-def find_datadome_cookie(browser=None):
-    """Read the datadome cookie for kicker.de from a browser's cookie store.
-
-    If the given browser has no readable cookie store (e.g. Chromium-based),
-    falls back to scanning all Mozilla-based browsers.
-    """
-    # Try the selected browser first
-    if browser and browser["cookie_globs"]:
-        for pattern in browser["cookie_globs"]:
-            for db_path in glob.glob(pattern):
-                cookie = _read_cookie_from_db(db_path)
-                if cookie:
-                    return cookie
-
-    # Fall back to any Mozilla-based browser with a readable cookie
-    for b in BROWSERS:
-        if b is browser or not b["cookie_globs"]:
-            continue
-        for pattern in b["cookie_globs"]:
-            for db_path in glob.glob(pattern):
-                cookie = _read_cookie_from_db(db_path)
-                if cookie:
-                    return cookie
-    return None
+    return [
+        {"bin": b[0], "name": b[1]}
+        for b in _BROWSER_DEFS
+        if shutil.which(b[0])
+    ]
 
 
 def _read_cookie_from_db(db_path):
-    """Extract datadome cookie from a Mozilla cookies.sqlite file."""
-    tmp = tempfile.mktemp(suffix=".sqlite")
+    fd, tmp = tempfile.mkstemp(suffix=".sqlite")
+    os.close(fd)
     try:
         shutil.copy2(db_path, tmp)
         conn = sqlite3.connect(tmp)
@@ -156,44 +78,95 @@ def _read_cookie_from_db(db_path):
             pass
 
 
-def fetch_with_primp(url, cookie):
-    """Fast fetch using primp with TLS impersonation + DataDome cookie."""
+def _scan_cookie_glob(pattern):
+    for db_path in glob.glob(pattern):
+        cookie = _read_cookie_from_db(db_path)
+        if cookie:
+            return cookie
+    return None
+
+
+def _read_cookie_pycookiecheat(pcc_type_name):
+    """Read the datadome cookie using pycookiecheat (for Chromium-based browsers)."""
+    try:
+        from pycookiecheat import get_cookies, BrowserType
+        browser_type = BrowserType[pcc_type_name]
+        cookies = get_cookies(_KICKER_URL, browser=browser_type)
+        return cookies.get("datadome")
+    except Exception:
+        return None
+
+
+def find_datadome_cookie(browser=None):
+    """Read the datadome cookie from a browser's cookie store.
+
+    Tries Mozilla cookie DB first, then pycookiecheat for Chromium-based,
+    then falls back to scanning all other browsers.
+    """
+    # Try the selected browser first
+    if browser:
+        if browser["cookie_glob"]:
+            cookie = _scan_cookie_glob(browser["cookie_glob"])
+            if cookie:
+                return cookie
+        if browser["pcc_type"]:
+            cookie = _read_cookie_pycookiecheat(browser["pcc_type"])
+            if cookie:
+                return cookie
+
+    # Fall back to all other browsers
+    for b in _BROWSERS.values():
+        if b is browser:
+            continue
+        if b["cookie_glob"]:
+            cookie = _scan_cookie_glob(b["cookie_glob"])
+            if cookie:
+                return cookie
+        if b["pcc_type"]:
+            cookie = _read_cookie_pycookiecheat(b["pcc_type"])
+            if cookie:
+                return cookie
+    return None
+
+
+def _fetch(url, cookie):
     import primp
 
-    client = primp.Client(impersonate="chrome_144", cookie_store=True)
-    r = client.get(url, cookies={"datadome": cookie})
+    r = primp.Client(impersonate="chrome_144", cookie_store=True).get(
+        url, cookies={"datadome": cookie}
+    )
     if r.status_code == 403 or "captcha-delivery.com" in r.text[:1000]:
         return None
-    if r.status_code != 200:
-        return None
-    return r.text
+    return r.text if r.status_code == 200 else None
 
 
-def refresh_cookie(browser):
-    """Open kicker.de in the browser to refresh the DataDome cookie.
-
-    Opens a tab, waits for the cookie to appear, then returns it.
-    """
+def _refresh_cookie(browser):
     print(
         f"[soccerResults] Opening kicker.de in {browser['name']} to refresh cookie...",
         file=sys.stderr,
     )
     subprocess.Popen(
-        [browser["bin"], KICKER_URL],
+        [browser["bin"], _KICKER_URL],
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
     )
-    deadline = time.time() + COOKIE_REFRESH_WAIT
+    deadline = time.time() + _COOKIE_REFRESH_WAIT
     while time.time() < deadline:
-        time.sleep(COOKIE_POLL_INTERVAL)
+        time.sleep(1)
         cookie = find_datadome_cookie()
         if cookie:
             return cookie
     return None
 
 
+def _resolve_browser(name):
+    if name and name in _BROWSERS:
+        return _BROWSERS[name]
+    installed = detect_installed_browsers()
+    return _BROWSERS[installed[0]["bin"]] if installed else None
+
+
 def main():
-    # --detect-browsers: output JSON list of installed browsers
     if "--detect-browsers" in sys.argv:
         print(json.dumps(detect_installed_browsers()))
         return
@@ -203,44 +176,29 @@ def main():
         sys.exit(1)
 
     url = sys.argv[1]
-
-    # Parse --browser flag
-    browser_bin = None
+    browser_name = None
     if "--browser" in sys.argv:
         idx = sys.argv.index("--browser")
         if idx + 1 < len(sys.argv):
-            browser_bin = sys.argv[idx + 1]
+            browser_name = sys.argv[idx + 1]
 
-    # Resolve browser
-    browser = get_browser(browser_bin) if browser_bin else None
-    if not browser:
-        # Fall back to first installed browser
-        installed = detect_installed_browsers()
-        if installed:
-            browser = get_browser(installed[0]["bin"])
+    browser = _resolve_browser(browser_name)
     if not browser:
         print("No supported browser found", file=sys.stderr)
         sys.exit(1)
 
     cookie = find_datadome_cookie(browser)
+    html = _fetch(url, cookie) if cookie else None
 
-    # Try fetch with existing cookie
-    if cookie:
-        html = fetch_with_primp(url, cookie)
-        if html and len(html) > 500:
-            print(html)
-            return
+    if not html:
+        cookie = _refresh_cookie(browser)
+        html = _fetch(url, cookie) if cookie else None
 
-    # Cookie missing or expired — open browser to refresh it
-    cookie = refresh_cookie(browser)
-    if cookie:
-        html = fetch_with_primp(url, cookie)
-        if html and len(html) > 500:
-            print(html)
-            return
-
-    print("Failed to fetch page after cookie refresh", file=sys.stderr)
-    sys.exit(1)
+    if html:
+        print(html)
+    else:
+        print("Failed to fetch page", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
