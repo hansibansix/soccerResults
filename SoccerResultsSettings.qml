@@ -1,4 +1,5 @@
 import QtQuick
+import Quickshell.Io
 import qs.Common
 import qs.Widgets
 import qs.Modules.Plugins
@@ -6,6 +7,23 @@ import qs.Modules.Plugins
 PluginSettings {
     id: root
     pluginId: "soccerResults"
+
+    property var detectedBrowsers: []
+
+    Process {
+        id: browserDetector
+        property string output: ""
+        command: ["python3", Qt.resolvedUrl("fetch_kicker.py").toString().replace("file://", ""), "--detect-browsers"]
+        running: true
+        stdout: SplitParser { onRead: line => { browserDetector.output += line; } }
+        onExited: {
+            try {
+                root.detectedBrowsers = JSON.parse(browserDetector.output);
+            } catch (e) {
+                root.detectedBrowsers = [];
+            }
+        }
+    }
 
     StyledText {
         width: parent.width
@@ -89,6 +107,27 @@ PluginSettings {
         description: "Base polling interval — auto-reduces to 1 min during live matches"
         placeholder: "2"
         defaultValue: "2"
+    }
+
+    StyledRect {
+        width: parent.width
+        height: 1
+        color: Theme.outlineVariant
+    }
+
+    SelectionSetting {
+        settingKey: "cookieBrowser"
+        label: "Cookie Browser"
+        description: "Browser used for kicker.de authentication. Visit kicker.de once in this browser to generate the cookie."
+        options: {
+            var opts = [{label: "Auto-detect", value: ""}];
+            for (var i = 0; i < root.detectedBrowsers.length; i++) {
+                var b = root.detectedBrowsers[i];
+                opts.push({label: b.name, value: b.bin});
+            }
+            return opts;
+        }
+        defaultValue: ""
     }
 
     StyledRect {

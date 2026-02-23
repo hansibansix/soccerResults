@@ -15,6 +15,7 @@ PluginComponent {
     // === Settings (read-only from pluginData) ===
     readonly property int refreshIntervalMinutes: parseInt(pluginData.refreshInterval) || 2
     readonly property string defaultLeague: pluginData.league || ""
+    readonly property string cookieBrowser: pluginData.cookieBrowser || ""
 
     // === Active league (runtime, changeable from popout) ===
     property string activeLeague: ""
@@ -84,8 +85,9 @@ PluginComponent {
     property real _lastStandingsFetch: 0
     readonly property int _standingsCacheMs: 600000           // 10min — standings change slowly
 
-    // === Script path ===
+    // === Script paths ===
     readonly property string _scriptPath: Qt.resolvedUrl("parse_kicker.py").toString().replace("file://", "")
+    readonly property string _fetchScriptPath: Qt.resolvedUrl("fetch_kicker.py").toString().replace("file://", "")
 
     // === Pill helpers ===
     readonly property var pillMatch: Api.findPillMatch(_pinnedMatchData, _favoriteMatchData)
@@ -161,18 +163,18 @@ PluginComponent {
         return _matchGoals[matchId] || [];
     }
 
-    readonly property string _userAgent: "Mozilla/5.0 (X11; Linux x86_64; rv:137.0) Gecko/20100101 Firefox/137.0"
+    readonly property string _browserArg: cookieBrowser ? " --browser '" + cookieBrowser + "'" : ""
 
     function _buildFetchCommand(url) {
-        return ["bash", "-c", "curl -sS --connect-timeout 10 --max-time 15 -A '" + _userAgent + "' '" + url + "' | python3 '" + _scriptPath + "'"];
+        return ["bash", "-c", "python3 '" + _fetchScriptPath + "' '" + url + "'" + _browserArg + " | python3 '" + _scriptPath + "'"];
     }
 
     function _buildGoalsFetchCommand(url) {
-        return ["bash", "-c", "curl -sS --connect-timeout 10 --max-time 15 -A '" + _userAgent + "' '" + url + "' | python3 '" + _scriptPath + "' --goals"];
+        return ["bash", "-c", "python3 '" + _fetchScriptPath + "' '" + url + "'" + _browserArg + " | python3 '" + _scriptPath + "' --goals"];
     }
 
     function _buildStandingsFetchCommand(url) {
-        return ["bash", "-c", "curl -sS --connect-timeout 10 --max-time 15 -A '" + _userAgent + "' '" + url + "' | python3 '" + _scriptPath + "' --standings"];
+        return ["bash", "-c", "python3 '" + _fetchScriptPath + "' '" + url + "'" + _browserArg + " | python3 '" + _scriptPath + "' --standings"];
     }
 
     function _parseResponse(output) {
