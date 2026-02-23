@@ -49,25 +49,38 @@ BROWSERS = [
         "name": "Floorp",
         "cookie_globs": [os.path.expanduser("~/.floorp/*/cookies.sqlite")],
     },
+    # Chromium-based browsers encrypt cookies, so they are only used for
+    # opening tabs to refresh the cookie. Cookie reading falls back to the
+    # first available Mozilla-based browser above.
     {
         "bin": "chromium",
         "name": "Chromium",
-        "cookie_globs": [os.path.expanduser("~/.config/chromium/*/Cookies")],
+        "cookie_globs": [],
     },
     {
         "bin": "google-chrome-stable",
         "name": "Google Chrome",
-        "cookie_globs": [os.path.expanduser("~/.config/google-chrome/*/Cookies")],
+        "cookie_globs": [],
     },
     {
         "bin": "brave-browser",
         "name": "Brave",
-        "cookie_globs": [os.path.expanduser("~/.config/BraveSoftware/Brave-Browser/*/Cookies")],
+        "cookie_globs": [],
+    },
+    {
+        "bin": "brave-browser-beta",
+        "name": "Brave Beta",
+        "cookie_globs": [],
+    },
+    {
+        "bin": "brave-browser-nightly",
+        "name": "Brave Nightly",
+        "cookie_globs": [],
     },
     {
         "bin": "vivaldi-stable",
         "name": "Vivaldi",
-        "cookie_globs": [os.path.expanduser("~/.config/vivaldi/*/Cookies")],
+        "cookie_globs": [],
     },
 ]
 
@@ -93,13 +106,29 @@ def get_browser(name):
     return None
 
 
-def find_datadome_cookie(browser):
-    """Read the datadome cookie for kicker.de from a browser's cookie store."""
-    for pattern in browser["cookie_globs"]:
-        for db_path in glob.glob(pattern):
-            cookie = _read_cookie_from_db(db_path)
-            if cookie:
-                return cookie
+def find_datadome_cookie(browser=None):
+    """Read the datadome cookie for kicker.de from a browser's cookie store.
+
+    If the given browser has no readable cookie store (e.g. Chromium-based),
+    falls back to scanning all Mozilla-based browsers.
+    """
+    # Try the selected browser first
+    if browser and browser["cookie_globs"]:
+        for pattern in browser["cookie_globs"]:
+            for db_path in glob.glob(pattern):
+                cookie = _read_cookie_from_db(db_path)
+                if cookie:
+                    return cookie
+
+    # Fall back to any Mozilla-based browser with a readable cookie
+    for b in BROWSERS:
+        if b is browser or not b["cookie_globs"]:
+            continue
+        for pattern in b["cookie_globs"]:
+            for db_path in glob.glob(pattern):
+                cookie = _read_cookie_from_db(db_path)
+                if cookie:
+                    return cookie
     return None
 
 
@@ -157,7 +186,7 @@ def refresh_cookie(browser):
     deadline = time.time() + COOKIE_REFRESH_WAIT
     while time.time() < deadline:
         time.sleep(COOKIE_POLL_INTERVAL)
-        cookie = find_datadome_cookie(browser)
+        cookie = find_datadome_cookie()
         if cookie:
             return cookie
     return None
