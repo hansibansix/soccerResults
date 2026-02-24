@@ -136,23 +136,27 @@ def _fetch(url, cookie=None):
     Uses a curl_cffi session with TLS impersonation. If the first request
     gets a 403 (DataDome challenge), the session captures the Set-Cookie
     and retries automatically.
+
+    A stale browser cookie poisons the session (DataDome rejects all
+    subsequent requests), so the browser cookie attempt uses a separate
+    session from the fresh fallback.
     """
     from curl_cffi import requests
 
-    session = requests.Session(impersonate="chrome")
-
     # Try with a browser cookie first (avoids the 403 round-trip)
     if cookie:
+        session = requests.Session(impersonate="chrome")
         r = session.get(url, cookies={"datadome": cookie})
         if _is_valid_html(r):
             return r.text
 
-    # First request seeds the datadome cookie via Set-Cookie on 403
+    # Fresh session — first request seeds the datadome cookie via Set-Cookie
+    session = requests.Session(impersonate="chrome")
     r = session.get(url)
     if _is_valid_html(r):
         return r.text
 
-    # Retry — the session now has the datadome cookie
+    # Retry — the session now has the datadome cookie from the 403
     if r.status_code == 403:
         r = session.get(url)
         if _is_valid_html(r):
