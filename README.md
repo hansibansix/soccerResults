@@ -94,7 +94,7 @@ SoccerApi.js         Shared helpers (URL builders, status checks, formatting)
 MatchCard.qml        Individual match card with score, goals, pin, link
 TeamDisplay.qml      Team crest + name component
 StandingRow.qml      Standings table row with zone indicators
-fetch_kicker.py      DataDome-aware HTML fetcher (primp + browser cookies)
+fetch_kicker.py      DataDome-aware HTML fetcher (curl_cffi + browser cookies)
 parse_kicker.py      HTML parser (matches, goals, standings → JSON)
 ```
 
@@ -130,21 +130,17 @@ git clone https://github.com/hansibansix/soccerResults.git \
     ~/.config/DankMaterialShell/plugins/soccerResults
 
 # Install Python dependencies
-pip install primp pycookiecheat
+pip install curl_cffi pycookiecheat
 
-# Visit kicker.de once in your browser to establish a DataDome cookie
-# Then restart DMS
+# Restart DMS
 dms restart
 ```
-
-The plugin auto-detects your installed browser for cookie access. To use a specific browser, set **Cookie Browser** in the plugin settings.
 
 ## Requirements
 
 - Python 3.7+
-- [primp](https://pypi.org/project/primp/) — TLS-impersonating HTTP client
-- [pycookiecheat](https://pypi.org/project/pycookiecheat/) — browser cookie decryption (Chromium-based browsers)
-- A supported browser with a kicker.de session (for DataDome cookie)
+- [curl_cffi](https://pypi.org/project/curl_cffi/) — TLS-impersonating HTTP client
+- [pycookiecheat](https://pypi.org/project/pycookiecheat/) — browser cookie decryption (optional, for Chromium-based browsers)
 
 ### Supported Browsers
 

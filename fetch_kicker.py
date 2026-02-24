@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Fetch kicker.de pages, handling DataDome bot protection.
 
-Uses primp (TLS-impersonating HTTP client) with a DataDome cookie read from
-a browser's cookie store. Mozilla-based browsers are read directly from
-their SQLite cookie DB. Chromium-based browsers use pycookiecheat to decrypt
-the encrypted cookie store. The cookie is set automatically when you visit
-kicker.de in the browser and lasts ~1 year.
+Uses curl_cffi (TLS-impersonating HTTP client) with a session that
+automatically handles DataDome's cookie-based protection. On the first
+request DataDome returns 403 + a Set-Cookie; the session captures it and
+the second request succeeds.
+
+Optionally reads a DataDome cookie from a browser's cookie store to
+skip the initial 403 round-trip.
 
 Usage:
     python3 fetch_kicker.py <url> [--browser <name>]
@@ -19,10 +21,8 @@ import json
 import os
 import shutil
 import sqlite3
-import subprocess
 import sys
 import tempfile
-import time
 
 _HOME = os.path.expanduser("~")
 
@@ -43,7 +43,6 @@ _BROWSER_DEFS = [
 
 _BROWSERS = {b[0]: {"bin": b[0], "name": b[1], "cookie_glob": b[2], "pcc_type": b[3]} for b in _BROWSER_DEFS}
 _KICKER_URL = "https://www.kicker.de/bundesliga/spieltag"
-_COOKIE_REFRESH_WAIT = 15
 
 
 def detect_installed_browsers():
@@ -98,12 +97,7 @@ def _read_cookie_pycookiecheat(pcc_type_name):
 
 
 def find_datadome_cookie(browser=None):
-    """Read the datadome cookie from a browser's cookie store.
-
-    Tries Mozilla cookie DB first, then pycookiecheat for Chromium-based,
-    then falls back to scanning all other browsers.
-    """
-    # Try the selected browser first
+    """Read the datadome cookie from a browser's cookie store."""
     if browser:
         if browser["cookie_glob"]:
             cookie = _scan_cookie_glob(browser["cookie_glob"])
@@ -114,7 +108,6 @@ def find_datadome_cookie(browser=None):
             if cookie:
                 return cookie
 
-    # Fall back to all other browsers
     for b in _BROWSERS.values():
         if b is browser:
             continue
@@ -129,33 +122,42 @@ def find_datadome_cookie(browser=None):
     return None
 
 
-def _fetch(url, cookie):
-    import primp
-
-    r = primp.Client(impersonate="chrome_144", cookie_store=True).get(
-        url, cookies={"datadome": cookie}
+def _is_valid_html(r):
+    """Check if the response is a successful, non-captcha HTML page."""
+    return (
+        r.status_code == 200
+        and "captcha-delivery.com" not in r.text[:1000]
     )
-    if r.status_code == 403 or "captcha-delivery.com" in r.text[:1000]:
-        return None
-    return r.text if r.status_code == 200 else None
 
 
-def _refresh_cookie(browser):
-    print(
-        f"[soccerResults] Opening kicker.de in {browser['name']} to refresh cookie...",
-        file=sys.stderr,
-    )
-    subprocess.Popen(
-        [browser["bin"], _KICKER_URL],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    deadline = time.time() + _COOKIE_REFRESH_WAIT
-    while time.time() < deadline:
-        time.sleep(1)
-        cookie = find_datadome_cookie()
-        if cookie:
-            return cookie
+def _fetch(url, cookie=None):
+    """Fetch a kicker.de URL, handling DataDome bot protection.
+
+    Uses a curl_cffi session with TLS impersonation. If the first request
+    gets a 403 (DataDome challenge), the session captures the Set-Cookie
+    and retries automatically.
+    """
+    from curl_cffi import requests
+
+    session = requests.Session(impersonate="chrome")
+
+    # Try with a browser cookie first (avoids the 403 round-trip)
+    if cookie:
+        r = session.get(url, cookies={"datadome": cookie})
+        if _is_valid_html(r):
+            return r.text
+
+    # First request seeds the datadome cookie via Set-Cookie on 403
+    r = session.get(url)
+    if _is_valid_html(r):
+        return r.text
+
+    # Retry — the session now has the datadome cookie
+    if r.status_code == 403:
+        r = session.get(url)
+        if _is_valid_html(r):
+            return r.text
+
     return None
 
 
@@ -183,16 +185,8 @@ def main():
             browser_name = sys.argv[idx + 1]
 
     browser = _resolve_browser(browser_name)
-    if not browser:
-        print("No supported browser found", file=sys.stderr)
-        sys.exit(1)
-
-    cookie = find_datadome_cookie(browser)
-    html = _fetch(url, cookie) if cookie else None
-
-    if not html:
-        cookie = _refresh_cookie(browser)
-        html = _fetch(url, cookie) if cookie else None
+    cookie = find_datadome_cookie(browser) if browser else None
+    html = _fetch(url, cookie)
 
     if html:
         print(html)
